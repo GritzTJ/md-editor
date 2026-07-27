@@ -81,6 +81,10 @@ const CASES = [
   ["subscript", "H~2~O and CO~2~\n"],
   ["superscript", "X^2^ plus Y^n^\n"],
   ["heading with an id", "### Heading {#custom-id}\n"],
+  // A generated anchor must never end up written into the source.
+  ["plain headings keep no id", "# One\n\n## Two words\n\n### Trois \u00e9l\u00e9ments\n"],
+  ["duplicate heading text", "# Same\n\n# Same\n\n# Same\n"],
+  ["explicit and generated mixed", "# Auto\n\n## Manual {#manual}\n\n### Auto again\n"],
   ["definition list", "Term\n: The definition.\n"],
   ["definition list, several terms", "First\n: One.\n\nSecond\n: Two.\n"],
   ["definition list, two terms one definition", "First\nSecond\n: Shared.\n"],

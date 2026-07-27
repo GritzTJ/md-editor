@@ -188,7 +188,7 @@ by construct, by `test/syntax.mjs`. Each one is checked twice: that the preview
 renders it as documented, and that it survives being edited in the rendered
 view — a construct can render perfectly and still be destroyed on the way back.
 
-**All 58 documented constructs are supported, and all 58 survive the round
+**All 62 checked constructs are supported, and all 62 survive the round
 trip.**
 
 Basic syntax: headings (hash and setext), paragraphs, all three line-break
@@ -200,6 +200,19 @@ angle-bracket / reference-style links, images, escapes, raw HTML.
 Extended syntax: tables with alignment, fenced code blocks with language tags,
 footnotes, heading IDs, definition lists, strikethrough, task lists, emoji
 shortcodes, highlight, subscript, superscript, and automatic URL linking.
+
+**Heading anchors are generated automatically**, the way GitHub, GitLab, Pandoc
+and the static site generators do it: a table of contents written as
+`[Section](#section)` works without the author labelling anything. An explicit
+`{#custom-id}` wins, duplicates are numbered, and accents are kept so
+`Fonctionnalités étendues` becomes `fonctionnalités-étendues`.
+
+Those generated anchors exist for navigation only and are **never written into
+the source**. Every other tool gets that for free by being a one-way converter;
+this one can write the rendered document back, so the distinction is explicit —
+only an identifier you typed yourself is stored in the document model, and only
+that one is serialised. Edit the preview of a document with fifty headings and
+the source comes back with exactly the labels you wrote, and no others.
 
 Everything is bundled: the six markdown-it plugins and the emoji table are
 compiled into the same single file, and `verify.mjs` still confirms the bundle
@@ -257,7 +270,7 @@ npm install --no-save puppeteer
 node test/browser.mjs      # 77 end-to-end tests
 node test/roundtrip.mjs    # 33 Markdown constructs, round-tripped
 node test/buttons.mjs      # 41 controls, one assertion each
-node test/syntax.mjs       # 58 Markdown Guide constructs, render + round trip
+node test/syntax.mjs       # 62 Markdown Guide constructs, render + round trip
 ```
 
 `browser.mjs` drives a real Chrome against the served application. It checks

@@ -89,18 +89,50 @@ function taskListPlugin(md) {
 }
 
 /**
- * Heading identifiers: `### Heading {#custom-id}`.
+ * Turn heading text into an anchor, the way GitHub does: lower case, keep
+ * letters and digits from any alphabet, drop punctuation, spaces become
+ * hyphens. Accented characters are kept, so `Fonctionnalités étendues` stays
+ * `fonctionnalités-étendues` and matches the link a document would already
+ * contain.
+ */
+export function slugify(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Plain text of an inline token, markers stripped. */
+function inlineText(token) {
+  let out = "";
+  for (const child of token.children || []) {
+    if (child.type === "text" || child.type === "code_inline") out += child.content;
+  }
+  return out;
+}
+
+/**
+ * Heading identifiers, explicit and automatic.
  *
- * Written by hand rather than pulled from a general attributes plugin, which
- * would accept arbitrary `{key=value}` pairs on any element. DOMPurify would
- * strip the dangerous ones, but a narrow rule that only ever sets `id`, and
- * only on a heading, leaves nothing to strip in the first place.
+ * Explicit is `### Heading {#custom-id}`. Handled by hand rather than with a
+ * general attributes plugin, which would accept arbitrary `{key=value}` pairs
+ * on any element: DOMPurify would strip the dangerous ones, but a rule that
+ * only ever sets `id`, and only on a heading, leaves nothing to strip.
+ *
+ * Automatic is what GitHub, GitLab, Pandoc and the static site generators all
+ * do: derive an anchor from the heading text so a table of contents works
+ * without the author writing anything. Those tools are one-way converters and
+ * never touch the source, which is why the distinction below matters here and
+ * not for them -- see the `autoId` flag, and how the parser reads it.
  */
 function headingIdsPlugin(md) {
-  const ID = /\s*\{#([A-Za-z0-9_-]+)\}\s*$/;
+  const EXPLICIT = /\s*\{#([A-Za-z0-9_-]+)\}\s*$/;
 
   md.core.ruler.after("inline", "heading_ids", (state) => {
     const tokens = state.tokens;
+    const used = new Map();
 
     for (let i = 0; i < tokens.length - 1; i++) {
       if (tokens[i].type !== "heading_open") continue;
@@ -108,21 +140,35 @@ function headingIdsPlugin(md) {
       const inline = tokens[i + 1];
       if (!inline || inline.type !== "inline") continue;
 
-      const match = ID.exec(inline.content);
-      if (!match) continue;
+      const explicit = EXPLICIT.exec(inline.content);
+      let id;
 
-      tokens[i].attrSet("id", match[1]);
-      inline.content = inline.content.replace(ID, "");
+      if (explicit) {
+        id = explicit[1];
+        inline.content = inline.content.replace(EXPLICIT, "");
 
-      // The heading text is already split into child tokens, so the marker has
-      // to be removed from the last one as well or it would still render.
-      const kids = inline.children || [];
-      for (let j = kids.length - 1; j >= 0; j--) {
-        if (kids[j].type === "text") {
-          kids[j].content = kids[j].content.replace(ID, "");
-          break;
+        // The heading text is already split into child tokens, so the marker
+        // has to be removed from the last one as well or it would still render.
+        const kids = inline.children || [];
+        for (let j = kids.length - 1; j >= 0; j--) {
+          if (kids[j].type === "text") {
+            kids[j].content = kids[j].content.replace(EXPLICIT, "");
+            break;
+          }
         }
+      } else {
+        id = slugify(inlineText(inline));
+        if (!id) continue;
       }
+
+      // Two headings with the same text would otherwise share an anchor and
+      // every link would land on the first. Explicit identifiers take part in
+      // the same count, so they cannot be shadowed either.
+      const seen = used.get(id) || 0;
+      used.set(id, seen + 1);
+
+      tokens[i].attrSet("id", seen ? `${id}-${seen}` : id);
+      tokens[i].meta = { ...(tokens[i].meta || null), autoId: !explicit };
     }
     return true;
   });
@@ -187,6 +233,27 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 
   node.setAttribute("target", "_blank");
   node.setAttribute("rel", "noopener noreferrer");
+});
+
+/**
+ * Keep the identifier on headings.
+ *
+ * DOMPurify drops any `id` whose value names an existing property of
+ * `document` -- a defence against DOM clobbering. It applies that test whatever
+ * the element, so an ordinary `# Images` heading lost its anchor because
+ * `document.images` exists, and the table of contents pointing at it went dead.
+ *
+ * Only `embed`, `form`, `iframe`, `img` and `object` can contribute named
+ * properties to `document`; a heading cannot clobber anything. The exception is
+ * therefore limited to h1-h6, and the protection stays in force everywhere
+ * else. The values are safe by construction: `slugify` emits nothing but
+ * letters, digits and hyphens, and an explicit identifier is matched against
+ * the same restricted set.
+ */
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+  if (data.attrName === "id" && /^H[1-6]$/.test(node.tagName)) {
+    data.forceKeepAttr = true;
+  }
 });
 
 const PURIFY_CONFIG = {
@@ -368,13 +435,16 @@ const marks = baseSchema.spec.marks
   })
   .addToStart("link", baseSchema.spec.marks.get("link"));
 
-// `id` on headings, for `### Heading {#custom-id}`.
+// `id` holds only what the author wrote as `{#custom-id}`. An anchor is still
+// rendered for every heading, derived from its text at display time -- the same
+// split the preview makes, and the reason editing never adds identifiers to the
+// source.
 const heading = {
   ...baseSchema.spec.nodes.get("heading"),
   attrs: { level: { default: 1 }, id: { default: null } },
   toDOM(node) {
-    const attrs = node.attrs.id ? { id: node.attrs.id } : {};
-    return [`h${node.attrs.level}`, attrs, 0];
+    const id = node.attrs.id || slugify(node.textContent);
+    return [`h${node.attrs.level}`, id ? { id } : {}, 0];
   },
   parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
     tag: `h${level}`,
@@ -434,7 +504,13 @@ export const parser = new MarkdownParser(schema, md, {
   },
   heading: {
     block: "heading",
-    getAttrs: (tok) => ({ level: +tok.tag.slice(1), id: tok.attrGet("id") }),
+    getAttrs: (tok) => ({
+      level: +tok.tag.slice(1),
+      // Only an identifier the author actually wrote is kept in the model.
+      // Storing a generated one would write `{#slug}` into every heading the
+      // first time the rendered document is edited -- text nobody typed.
+      id: tok.meta && tok.meta.autoId ? null : tok.attrGet("id"),
+    }),
   },
   code_block: { block: "code_block", noCloseToken: true },
   fence: { block: "code_block", getAttrs: (tok) => ({ params: tok.info || "" }), noCloseToken: true },

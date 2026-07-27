@@ -34,9 +34,9 @@ const CASES = [
   // ---------------------------------------------------------------- basic
   ["basic", "heading, hash levels 1-6",
     "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
-    has(/<h1>One<\/h1>[\s\S]*<h6>Six<\/h6>/)],
-  ["basic", "heading, setext level 1", "One\n===\n", has(/<h1>One<\/h1>/)],
-  ["basic", "heading, setext level 2", "Two\n---\n", has(/<h2>Two<\/h2>/)],
+    has(/<h1[^>]*>One<\/h1>[\s\S]*<h6[^>]*>Six<\/h6>/)],
+  ["basic", "heading, setext level 1", "One\n===\n", has(/<h1[^>]*>One<\/h1>/)],
+  ["basic", "heading, setext level 2", "Two\n---\n", has(/<h2[^>]*>Two<\/h2>/)],
   ["basic", "paragraphs", "First.\n\nSecond.\n", has(/<p>First\.<\/p>\s*<p>Second\.<\/p>/)],
   ["basic", "line break, two trailing spaces", "one  \ntwo\n", has(/one<br>\s*two/)],
   ["basic", "line break, <br> tag", "one<br>\ntwo\n", has(/one<br>/)],
@@ -53,7 +53,7 @@ const CASES = [
   ["basic", "blockquote, nested", "> outer\n>\n>> inner\n",
     has(/<blockquote>[\s\S]*<blockquote>[\s\S]*inner/)],
   ["basic", "blockquote with other elements", "> ### Heading\n>\n> - item\n",
-    has(/<blockquote>[\s\S]*<h3>Heading<\/h3>[\s\S]*<li>item<\/li>/)],
+    has(/<blockquote>[\s\S]*<h3[^>]*>Heading<\/h3>[\s\S]*<li>item<\/li>/)],
   ["basic", "ordered list", "1. one\n2. two\n", has(/<ol>[\s\S]*<li>one<\/li>[\s\S]*<li>two<\/li>/)],
   ["basic", "ordered list, non-sequential numbers", "1. one\n1. two\n1. three\n",
     has(/<ol>[\s\S]*<li>one<\/li>[\s\S]*<li>three<\/li>/)],
@@ -93,6 +93,15 @@ const CASES = [
   ["extended", "fenced code block with language", "```json\n{}\n```\n", has(/class="language-json"/)],
   ["extended", "footnote", "Text.[^1]\n\n[^1]: The note.\n", has(/<sup|footnote/i)],
   ["extended", "heading ID", "### Heading {#custom-id}\n", has(/<h3 id="custom-id">/)],
+  ["extended", "automatic heading ID", "### My Great Heading\n", has(/<h3 id="my-great-heading">/)],
+  ["extended", "linking to a heading ID", "# Heading IDs\n\n[go](#heading-ids)\n",
+    has(/<h1 id="heading-ids">[\s\S]*href="#heading-ids"/)],
+  // DOMPurify drops ids that name a property of `document`, as a defence
+  // against DOM clobbering. A heading cannot clobber, so the anchor must
+  // survive -- `# Images` losing its id made a table of contents go dead.
+  ["extended", "heading ID that names a DOM property", "# Images\n", has(/<h1 id="images">/)],
+  ["extended", "duplicate headings get distinct IDs", "# Same\n\n# Same\n",
+    has(/<h1 id="same">[\s\S]*<h1 id="same-1">/)],
   ["extended", "definition list", "Term\n: Definition\n", has(/<dl>[\s\S]*<dt>Term<\/dt>[\s\S]*<dd>Definition<\/dd>/)],
   ["extended", "strikethrough", "~~struck~~", has(/<s>struck<\/s>|<del>struck<\/del>/)],
   ["extended", "task list", "- [x] done\n- [ ] to do\n", has(/task-item[\s\S]*task-check/)],
