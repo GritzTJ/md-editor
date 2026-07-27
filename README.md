@@ -5,7 +5,11 @@ Le serveur livre un fichier HTML et n'entend plus jamais parler du document :
 aucune requête réseau n'est émise après le chargement de la page, et la politique
 de sécurité du document demande au navigateur d'en bloquer toute tentative.
 
-L'application tient en un seul fichier de ~600 Ko (~200 Ko compressés), sans
+Le document s'édite de deux façons, au choix et en même temps : **en source**,
+avec coloration syntaxique, et **en rendu**, directement dans le document mis en
+forme, avec un ruban de mise en forme. Les deux vues restent synchronisées.
+
+L'application tient en un seul fichier de ~960 Ko (~330 Ko compressés), sans
 dépendance externe à l'exécution.
 
 ---
@@ -76,12 +80,18 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 
 ## Fonctionnalités
 
-- **Édition** : CodeMirror 6, coloration syntaxique du Markdown, blocs de code
-  colorés selon leur langage, prolongement automatique des listes, numéros de
-  ligne, annuler/rétablir.
+- **Édition de la source** : CodeMirror 6, coloration syntaxique du Markdown,
+  blocs de code colorés selon leur langage, prolongement automatique des listes,
+  numéros de ligne, annuler/rétablir.
+- **Édition du rendu** : bouton **Édition**, et le document mis en forme devient
+  la surface de saisie, avec un ruban : gras, italique, barré, code, niveaux de
+  titre, listes à puces / numérotées / de tâches, citation, séparateur, lien,
+  image, tableau (avec ajout et suppression de lignes et colonnes). Les
+  raccourcis Markdown continuent de fonctionner : taper `## ` crée un titre,
+  `- ` une liste, ` ``` ` un bloc de code.
 - **Aperçu en direct** : rendu GFM (tableaux, listes de tâches, barré) assaini
   par DOMPurify, défilement synchronisé, séparateur ajustable.
-- **Trois modes** : éditeur seul, vue partagée, aperçu seul.
+- **Trois dispositions** : source seule, vue partagée, rendu seul.
 - **Fichiers locaux** : `Ouvrir` / `Enregistrer` écrivent de vrais fichiers `.md`
   via l'API File System Access (Chrome, Edge). Sur Firefox et Safari, repli
   automatique sur import de fichier et téléchargement.
@@ -96,6 +106,17 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 | `Ctrl`+`S` | Enregistrer |
 | `Ctrl`+`Maj`+`S` | Enregistrer sous |
 | `Ctrl`+`Z` / `Ctrl`+`Y` | Annuler / rétablir |
+
+Dans le rendu, en mode Édition :
+
+| Raccourci | Action |
+| --- | --- |
+| `Ctrl`+`B` / `Ctrl`+`I` | Gras / italique |
+| `Ctrl`+`Maj`+`X` | Barré |
+| `Ctrl`+`E` | Code |
+| `Ctrl`+`K` | Lien |
+| `Ctrl`+`Maj`+`1..6` | Titre de niveau 1 à 6 |
+| `Tab` / `Maj`+`Tab` | Cellule suivante / précédente, ou retrait de liste |
 
 ---
 
@@ -112,6 +133,28 @@ supprimer à tout moment.
 
 ---
 
+## Éditer le rendu : ce qu'il faut savoir
+
+Markdown → HTML est direct ; le chemin inverse ne l'est pas. Quand vous éditez
+dans le rendu, la source n'est pas modifiée par retouches successives : elle est
+**régénérée** depuis le document. Trois conséquences, par ordre d'importance :
+
+1. **Tant que vous n'activez pas le mode Édition, la source reste intacte au
+   caractère près.** Le mode lecture ne réécrit jamais rien.
+2. **Une fois activé, vos conventions d'écriture sont normalisées.** `*` devient
+   `-` pour les puces, les titres soulignés deviennent des `#`, l'indentation des
+   listes est uniformisée. Le sens est préservé, la forme est standardisée.
+3. **Rien n'est perdu.** Le modèle de document couvre tout ce que l'aperçu sait
+   afficher — tableaux avec alignement, cases à cocher, barré — et le HTML brut
+   écrit dans le Markdown est conservé mot pour mot, présenté comme un bloc
+   distinct non modifiable dans le rendu (éditez-le dans le panneau source).
+
+Ce n'est pas une promesse en l'air : `test/roundtrip.mjs` vérifie sur 33
+constructions que le rendu est identique après un aller-retour, et que la source
+ne dérive plus au passage suivant.
+
+---
+
 ## Limites connues
 
 - **Les images distantes ne s'affichent pas.** `![](https://…)` est bloqué par
@@ -122,6 +165,13 @@ supprimer à tout moment.
   téléchargement.
 - **Pas de mode hors ligne automatique** (pas de service worker). Le fichier
   autonome téléchargeable joue ce rôle, de façon plus vérifiable.
+- **Le HTML brut ne s'édite pas dans le rendu.** Il y apparaît comme un bloc
+  encadré, conservé tel quel ; modifiez-le dans le panneau source. Comme toute
+  image ou tout bloc atomique, le sélectionner puis taper le remplace — c'est
+  annulable par `Ctrl`+`Z`.
+- **Taper `<details>` dans la source insère automatiquement `</details>`**,
+  comportement de `@codemirror/lang-html` hérité du parseur HTML imbriqué. Coller
+  du HTML déjà complet n'y est pas soumis.
 
 ---
 
@@ -145,14 +195,20 @@ produite si l'un de ces points casse.
 ```bash
 npm run dev &
 npm install --no-save puppeteer
-node test/browser.mjs
+node test/browser.mjs      # 70 tests de bout en bout
+node test/roundtrip.mjs    # 33 constructions Markdown, aller-retour
 ```
 
-47 tests dans un vrai Chrome, contre l'application servie. Ils vérifient
+`browser.mjs` tourne dans un vrai Chrome, contre l'application servie. Il vérifie
 notamment que le navigateur bloque effectivement `fetch`, WebSocket,
 `sendBeacon`, les images distantes et les imports dynamiques ; que l'aperçu
-neutralise scripts, `onerror`, `javascript:`, iframes et formulaires ; et que le
+neutralise scripts, `onerror`, `javascript:`, iframes et formulaires ; que
+l'édition du rendu se répercute dans la source et réciproquement ; et que le
 fichier autonome démarre en `file://` sans emporter le document en cours.
+
+`roundtrip.mjs` est le filet de sécurité du mode Édition : pour chaque
+construction Markdown, il compare le rendu avant et après un aller-retour, et
+vérifie qu'un second passage ne modifie plus la source.
 
 `puppeteer` n'est pas une dépendance du projet — il téléchargerait un Chrome
 complet à chaque `npm install`. Pour tester l'image plutôt que le build local :
@@ -165,13 +221,21 @@ TARGET=http://localhost:8080/ node test/browser.mjs
 ### Organisation
 
 ```
-src/app.js          application (interface, rendu, E/S fichier)
-src/styles.css      thème clair/sombre, styles de l'aperçu
+src/app.js          interface, synchronisation des deux panneaux, E/S fichier
+src/markdown.js     moteur partagé : markdown-it, schéma, analyse, sérialisation
+src/rich.js         éditeur ProseMirror et commandes du ruban
+src/styles.css      thème clair/sombre, styles du rendu
 build.mjs           bundle esbuild -> fichier HTML unique + CSP + condensats
 verify.mjs          contrôles sur le fichier produit
+test/browser.mjs    tests de bout en bout
+test/roundtrip.mjs  fidélité de l'aller-retour Markdown <-> ProseMirror
 nginx/default.conf  en-têtes de sécurité, méthodes GET/HEAD uniquement
 Dockerfile          construction multi-étapes -> nginx non privilégié
 ```
+
+`src/markdown.js` est le point sensible : source unique de l'analyse et de la
+sérialisation, c'est lui qui garantit que ce qui s'affiche et ce qui s'édite ne
+peuvent pas diverger.
 
 Le `<body>` livré ne contient qu'un conteneur vide : toute l'interface est
 construite en JavaScript. C'est ce qui permet au bouton « Télécharger l'app » de

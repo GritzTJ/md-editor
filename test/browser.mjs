@@ -57,6 +57,7 @@ async function newPage() {
 }
 
 const { page, errors, csp } = await newPage();
+const cdp = await page.createCDPSession();
 
 /** Selectionne un bouton par son libelle exact. */
 const btn = async (label) => {
@@ -66,15 +67,33 @@ const btn = async (label) => {
   throw new Error(`bouton introuvable : ${label}`);
 };
 
-/** Remplace integralement le contenu de l'editeur. */
-async function retype(content) {
+async function clearSource() {
   await page.click(".cm-content");
   await page.keyboard.down("Control");
   await page.keyboard.press("KeyA");
   await page.keyboard.up("Control");
   await page.keyboard.press("Backspace");
+}
+
+/** Remplace le contenu du panneau source en simulant une frappe reelle. */
+async function retype(content) {
+  await clearSource();
   await page.type(".cm-content", content);
   await wait(400);
+}
+
+/**
+ * Pose un contenu d'un bloc, comme un collage.
+ *
+ * A utiliser des que la source contient du HTML : lang-markdown delegue les
+ * blocs HTML au parseur de @codemirror/lang-html, dont `autoCloseTags` ajoute
+ * la balise fermante quand on tape « > ». Frappe caractere par caractere, un
+ * fragment deja complet ressortirait donc avec une fermeture en trop.
+ */
+async function pasteSource(content) {
+  await clearSource();
+  await cdp.send("Input.insertText", { text: content });
+  await wait(500);
 }
 
 /* ========================= 1. chargement ========================= */
@@ -202,7 +221,6 @@ ok("le brouillon est efface au decochage", (await draft()) === null);
 
 /* ========================= 7. application autonome ========================= */
 console.log("\n--- fichier autonome telechargeable ---");
-const cdp = await page.createCDPSession();
 await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: DL });
 
 const CANARY = "MON SECRET ABSOLU 4242";
@@ -234,7 +252,137 @@ if (existsSync(standalonePath)) {
   await p2.close();
 }
 
-/* ========================= 8. export du rendu ========================= */
+/* ========================= 8. edition dans le rendu ========================= */
+console.log("\n--- edition dans le rendu ---");
+
+/** Texte du panneau source, reconstitue depuis les lignes affichees. */
+const sourceText = () =>
+  page.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent).join("\n"));
+
+/** Vide l'editeur riche et y tape du contenu. */
+async function retypeRich(content) {
+  await page.click("#rich .ProseMirror");
+  await page.keyboard.down("Control");
+  await page.keyboard.press("KeyA");
+  await page.keyboard.up("Control");
+  await page.keyboard.press("Backspace");
+  if (content) await page.keyboard.type(content);
+  await wait(500);
+}
+
+await retype("# Depart\n\nTexte initial.");
+await (await btn("Edition")).click();
+await wait(400);
+
+ok("le ruban de mise en forme apparait",
+  (await page.$eval(".rb", (e) => getComputedStyle(e).display)) !== "none");
+ok("l'editeur riche est monte", (await page.$("#rich .ProseMirror")) !== null);
+ok("l'apercu en lecture est masque",
+  (await page.$eval("#preview", (e) => getComputedStyle(e).display)) === "none");
+ok("le rendu reprend le document courant",
+  (await page.$eval("#rich h1", (e) => e.textContent).catch(() => null)) === "Depart");
+
+// --- la frappe dans le rendu remonte vers la source ---
+await retypeRich("Ecrit dans le rendu");
+ok("la frappe dans le rendu met a jour la source",
+  (await sourceText()).includes("Ecrit dans le rendu"), await sourceText());
+
+// --- le ruban applique bien du Markdown ---
+await page.keyboard.down("Control");
+await page.keyboard.press("KeyA");
+await page.keyboard.up("Control");
+await (await btn("G")).click();
+await wait(400);
+ok("le bouton Gras produit du **gras** dans la source",
+  /\*\*Ecrit dans le rendu\*\*/.test(await sourceText()), await sourceText());
+
+await page.keyboard.down("Control");
+await page.keyboard.press("KeyA");
+await page.keyboard.up("Control");
+await (await btn("G")).click();
+await wait(300);
+
+await page.select(".rb-select", "h2");
+await wait(400);
+ok("le selecteur de style produit un titre de niveau 2",
+  /^##\s/.test((await sourceText()).trim()), await sourceText());
+
+await page.select(".rb-select", "p");
+await wait(300);
+
+// --- listes et taches ---
+await retypeRich("alpha");
+await (await btn("Taches")).click();
+await wait(400);
+ok("le bouton Taches produit une case a cocher",
+  /^-\s\[ \]\salpha/.test((await sourceText()).trim()), await sourceText());
+
+await page.click("#rich .task-check");
+await wait(400);
+ok("cliquer la case coche la tache dans la source",
+  /^-\s\[x\]\salpha/.test((await sourceText()).trim()), await sourceText());
+
+ok("la case cochee se reflete dans le rendu",
+  (await page.$eval("#rich li.task-item", (e) => e.getAttribute("data-checked"))) === "true");
+
+// --- tableaux ---
+await retypeRich("");
+await (await btn("Tableau")).click();
+await wait(500);
+const tableSource = await sourceText();
+ok("le bouton Tableau produit une table GFM",
+  /\|\s*\|/.test(tableSource) && /\|\s*---\s*\|/.test(tableSource), tableSource.slice(0, 80));
+ok("les outils de tableau apparaissent quand le curseur y est",
+  (await page.$eval(".rb-group", (e) => getComputedStyle(e).display)) !== "none");
+ok("le tableau est rendu dans l'editeur riche",
+  (await page.$$eval("#rich table th", (e) => e.length)) === 3);
+
+await (await btn("+Col")).click();
+await wait(400);
+ok("ajouter une colonne se repercute dans le rendu",
+  (await page.$$eval("#rich table th", (e) => e.length)) === 4);
+
+// --- la source reste maitresse : ce qui est tape a gauche descend a droite ---
+await retype("## Depuis la source\n\nAvec du *style*.");
+await wait(500);
+ok("la frappe dans la source met a jour le rendu",
+  (await page.$eval("#rich h2", (e) => e.textContent).catch(() => null)) === "Depuis la source");
+ok("l'emphase saisie dans la source est rendue",
+  (await page.$$eval("#rich em", (e) => e.length)) === 1);
+
+// --- le HTML brut traverse l'aller-retour ---
+const HTML_FIXTURE = "Avant\n\n<details><summary>Plus</summary>\ncache\n</details>\n\nApres";
+await pasteSource(HTML_FIXTURE);
+ok("la source recoit le fragment HTML sans alteration",
+  (await sourceText()) === HTML_FIXTURE, await sourceText());
+await wait(400);
+ok("le HTML brut est signale comme non modifiable dans le rendu",
+  (await page.$("#rich .raw-html")) !== null);
+
+// On edite le paragraphe voisin, pas le bloc HTML. Cliquer sur ce dernier le
+// selectionnerait comme un noeud atomique -- taper le remplacerait alors, ce
+// qui est le comportement normal d'un editeur, mais pas ce qu'on teste ici.
+await page.click("#rich p");
+await page.keyboard.press("End");
+await page.keyboard.type(" !");
+await wait(500);
+const afterEdit = await sourceText();
+ok("le HTML brut survit a une edition ailleurs dans le document",
+  afterEdit.includes("<details><summary>Plus</summary>"), afterEdit);
+ok("l'edition voisine a bien eu lieu", afterEdit.includes("Avant !"), afterEdit);
+
+// --- sortir du mode riche ne perd rien ---
+await retypeRich("Contenu final du rendu");
+await (await btn("Edition")).click();
+await wait(400);
+ok("quitter le mode riche repercute les dernieres modifications",
+  (await sourceText()).includes("Contenu final du rendu"), await sourceText());
+ok("l'apercu en lecture revient",
+  (await page.$eval("#preview", (e) => getComputedStyle(e).display)) !== "none");
+ok("le ruban disparait",
+  (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
+
+/* ========================= 9. export du rendu ========================= */
 console.log("\n--- export du rendu ---");
 await retype("# Rapport\n\nContenu **exporte**.");
 await (await btn("Exporter HTML")).click();

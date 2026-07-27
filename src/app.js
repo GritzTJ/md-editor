@@ -11,9 +11,13 @@
  * Toute l'interface est construite en JS pour que le document HTML porteur
  * reste un squelette vide -- ce qui rend la reconstruction du fichier autonome
  * (bouton « Telecharger l'app ») triviale et sans risque de fuite de contenu.
+ *
+ * Le document est edite de deux facons : en source, dans CodeMirror, et en
+ * rendu, dans ProseMirror. Le texte de CodeMirror fait toujours foi ; voir la
+ * section « Synchronisation » pour le detail.
  * ------------------------------------------------------------------------- */
 
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -26,12 +30,7 @@ import {
   rectangularSelection,
   crosshairCursor,
 } from "@codemirror/view";
-import {
-  defaultKeymap,
-  history,
-  historyKeymap,
-  indentWithTab,
-} from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   syntaxHighlighting,
   HighlightStyle,
@@ -40,8 +39,9 @@ import {
 } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
+
+import { renderMarkdown } from "./markdown.js";
+import { createRichEditor } from "./rich.js";
 
 /* ===========================================================================
  * Preferences locales
@@ -54,6 +54,7 @@ import DOMPurify from "dompurify";
 const KEY = {
   theme: "mdedit.theme",
   view: "mdedit.view",
+  rich: "mdedit.rich",
   split: "mdedit.split",
   autosave: "mdedit.autosave",
   draft: "mdedit.draft",
@@ -64,67 +65,18 @@ const KEY = {
 // d'exception propagee : l'editeur doit fonctionner meme sans stockage.
 const store = {
   get(k) {
-    try {
-      return localStorage.getItem(k);
-    } catch {
-      return null;
-    }
+    try { return localStorage.getItem(k); } catch { return null; }
   },
   set(k, v) {
-    try {
-      localStorage.setItem(k, v);
-      return true;
-    } catch {
-      return false;
-    }
+    try { localStorage.setItem(k, v); return true; } catch { return false; }
   },
   del(k) {
-    try {
-      localStorage.removeItem(k);
-    } catch {
-      /* ignore */
-    }
+    try { localStorage.removeItem(k); } catch { /* ignore */ }
   },
 };
 
 /* ===========================================================================
- * Rendu Markdown -> HTML assaini
- * ======================================================================== */
-
-marked.use({ gfm: true, breaks: false, pedantic: false });
-
-// Les liens du document sont ouverts dans un nouvel onglet sans referrer :
-// le site cible ne doit rien apprendre du document en cours d'edition.
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A" && node.hasAttribute("href")) {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-  }
-});
-
-const PURIFY_CONFIG = {
-  // <style> injecterait des regles dans toute la page, <form>/<input> donnent
-  // l'illusion d'un formulaire legitime : ni l'un ni l'autre n'a sa place dans
-  // un apercu de document.
-  FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select"],
-  FORBID_ATTR: ["srcset", "ping", "formaction"],
-  ALLOW_DATA_ATTR: false,
-};
-
-function renderMarkdown(src) {
-  let html;
-  try {
-    html = marked.parse(src, { async: false });
-  } catch (err) {
-    const p = document.createElement("p");
-    p.textContent = "Erreur d'analyse Markdown : " + err.message;
-    return p.outerHTML;
-  }
-  return DOMPurify.sanitize(html, PURIFY_CONFIG);
-}
-
-/* ===========================================================================
- * Coloration syntaxique
+ * Coloration syntaxique du panneau source
  *
  * Les couleurs ne sont pas fixees ici mais deleguees a des classes CSS, ce qui
  * permet au theme clair/sombre de la feuille de style de les piloter.
@@ -142,15 +94,12 @@ const mdHighlight = HighlightStyle.define([
   { tag: t.quote, class: "cm-md-quote" },
   { tag: t.list, class: "cm-md-list" },
   { tag: t.contentSeparator, class: "cm-md-sep" },
-  // Blocs de code delimites : lang-markdown delegue au parseur du langage.
   { tag: t.keyword, class: "cm-md-heading" },
   { tag: t.string, class: "cm-md-url" },
   { tag: t.comment, class: "cm-md-quote" },
   { tag: t.number, class: "cm-md-code" },
 ]);
 
-// Les couleurs de l'editeur suivent les variables CSS du document, donc le
-// theme bascule sans reconstruire l'EditorView.
 const cmTheme = EditorView.theme({
   "&": { color: "var(--fg)", backgroundColor: "var(--bg)", height: "100%" },
   ".cm-content": { caretColor: "var(--accent)", padding: "12px 0" },
@@ -177,6 +126,7 @@ const state = {
   fileName: "sans-titre.md",
   savedText: "", // contenu de reference pour l'indicateur « modifie »
   autosave: store.get(KEY.autosave) === "1",
+  richMode: store.get(KEY.rich) === "1",
 };
 
 const SAMPLE = `# Editeur Markdown local
@@ -186,12 +136,11 @@ jamais le contenu que vous tapez : il n'y a aucun appel reseau dans le code, et
 la politique de securite du document (\`connect-src 'none'\`) l'interdit au
 niveau du navigateur.
 
-## Ce que vous pouvez faire
+## Deux facons d'editer
 
-- Ouvrir et enregistrer de vrais fichiers \`.md\` depuis votre disque
-- Basculer entre edition, apercu et vue partagee
-- Exporter le rendu en HTML autonome
-- Telecharger l'application elle-meme pour l'utiliser hors ligne
+- [x] La source, a gauche, avec coloration syntaxique
+- [x] Le rendu, a droite : activez **Edition** pour y ecrire directement
+- [ ] Les deux reste~~nt~~ toujours synchronises
 
 > Pour un document contenant des secrets, le mode le plus sur reste :
 > telecharger l'application une fois, puis l'ouvrir en \`file://\`.
@@ -206,10 +155,6 @@ niveau du navigateur.
 // Les blocs de code sont colores dans l'editeur comme dans l'apercu.
 const secret = process.env.API_TOKEN;
 \`\`\`
-
-1. Editez ce texte
-2. Regardez l'apercu se mettre a jour
-3. Enregistrez sur votre disque
 `;
 
 /* ===========================================================================
@@ -230,11 +175,11 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-function button(label, title, onclick) {
-  return el("button", { type: "button", title, onclick, text: label });
+function button(label, title, onclick, cls = "") {
+  return el("button", { type: "button", class: cls, title, onclick, text: label });
 }
 
-// --- barre d'outils ---------------------------------------------------------
+// --- barre d'outils principale ---------------------------------------------
 
 const btnOpen = button("Ouvrir", "Ouvrir un fichier Markdown (Ctrl+O)", doOpen);
 const btnSave = button("Enregistrer", "Enregistrer (Ctrl+S)", doSave);
@@ -242,15 +187,18 @@ const btnSaveAs = button("Enregistrer sous", "Enregistrer sous (Ctrl+Maj+S)", do
 const btnNew = button("Nouveau", "Vider l'editeur", doNew);
 
 const viewButtons = {
-  editor: button("Editeur", "Afficher uniquement l'editeur", () => setView("editor")),
-  split: button("Partage", "Afficher l'editeur et l'apercu", () => setView("split")),
-  preview: button("Apercu", "Afficher uniquement l'apercu", () => setView("preview")),
+  editor: button("Editeur", "Afficher uniquement la source", () => setView("editor")),
+  split: button("Partage", "Afficher la source et le rendu", () => setView("split")),
+  preview: button("Apercu", "Afficher uniquement le rendu", () => setView("preview")),
 };
 const segView = el("div", { class: "seg", role: "group", "aria-label": "Mode d'affichage" },
   viewButtons.editor, viewButtons.split, viewButtons.preview);
 
+const btnRich = button("Edition", "Ecrire directement dans le document rendu", toggleRich);
+
 const btnExport = button("Exporter HTML", "Enregistrer le rendu en HTML autonome", doExportHtml);
-const btnStandalone = button("Telecharger l'app", "Enregistrer cette application en un fichier HTML utilisable hors ligne", doDownloadApp);
+const btnStandalone = button("Telecharger l'app",
+  "Enregistrer cette application en un fichier HTML utilisable hors ligne", doDownloadApp);
 const btnTheme = button("Theme", "Basculer clair / sombre", toggleTheme);
 const btnAbout = button("?", "Securite et fonctionnement", showAbout);
 
@@ -262,7 +210,8 @@ const chkAutosave = el("label", {
   title: "Conserver un brouillon dans ce navigateur pour survivre a un rechargement.\nDesactive par defaut : le brouillon est stocke en clair sur ce poste.",
 }, chkAutosaveInput, el("span", { text: "Brouillon local" }));
 
-const btnClearDraft = button("Effacer le brouillon", "Supprimer le brouillon conserve dans ce navigateur", doClearDraft);
+const btnClearDraft = button("Effacer le brouillon",
+  "Supprimer le brouillon conserve dans ce navigateur", doClearDraft);
 btnClearDraft.classList.add("hidden");
 
 const toolbar = el("header", { class: "tb" },
@@ -270,7 +219,7 @@ const toolbar = el("header", { class: "tb" },
   el("div", { class: "tb-sep" }),
   btnNew,
   el("div", { class: "tb-sep" }),
-  segView,
+  segView, btnRich,
   el("div", { class: "tb-sep" }),
   btnExport, btnStandalone,
   el("div", { class: "tb-spacer" }),
@@ -284,11 +233,77 @@ const fileInput = el("input", {
   onchange: onFileInputChange,
 });
 
+// --- ruban de mise en forme -------------------------------------------------
+
+const blockSelect = el("select", {
+  class: "rb-select",
+  title: "Style du paragraphe",
+  onchange: () => {
+    const v = blockSelect.value;
+    if (v === "p") rich.commands.paragraph();
+    else if (v === "code") rich.commands.codeBlock();
+    else rich.commands.heading(Number(v.slice(1)));
+  },
+});
+for (const [value, label] of [
+  ["p", "Paragraphe"], ["h1", "Titre 1"], ["h2", "Titre 2"], ["h3", "Titre 3"],
+  ["h4", "Titre 4"], ["h5", "Titre 5"], ["h6", "Titre 6"], ["code", "Bloc de code"],
+]) {
+  blockSelect.append(el("option", { value, text: label }));
+}
+
+const rb = {};
+const rbButton = (key, label, title, action, cls = "rb-btn") => {
+  const b = button(label, title, action, cls);
+  rb[key] = b;
+  return b;
+};
+
+// Libelles en toutes lettres plutot qu'en pictogrammes : la CSP interdit toute
+// police externe, et les symboles hors du plan multilingue de base (emoji de
+// lien, d'image) s'affichent en carre vide sur les systemes sans police emoji.
+const ribbon = el("div", { class: "rb", role: "toolbar", "aria-label": "Mise en forme" },
+  rbButton("undo", "Annuler", "Annuler (Ctrl+Z)", () => rich.commands.undo()),
+  rbButton("redo", "Retablir", "Retablir (Ctrl+Y)", () => rich.commands.redo()),
+  el("div", { class: "tb-sep" }),
+  blockSelect,
+  el("div", { class: "tb-sep" }),
+  rbButton("strong", "G", "Gras (Ctrl+B)", () => rich.commands.strong(), "rb-btn rb-bold"),
+  rbButton("em", "I", "Italique (Ctrl+I)", () => rich.commands.em(), "rb-btn rb-italic"),
+  rbButton("strikethrough", "S", "Barre (Ctrl+Maj+X)", () => rich.commands.strikethrough(), "rb-btn rb-strike"),
+  rbButton("code", "</>", "Code (Ctrl+E)", () => rich.commands.code(), "rb-btn rb-mono"),
+  el("div", { class: "tb-sep" }),
+  rbButton("bullet_list", "Liste", "Liste a puces", () => rich.commands.bulletList()),
+  rbButton("ordered_list", "Numeros", "Liste numerotee", () => rich.commands.orderedList()),
+  rbButton("task", "Taches", "Liste de taches", () => rich.commands.taskList()),
+  rbButton("outdent", "Retrait −", "Diminuer le retrait", () => rich.commands.lift()),
+  el("div", { class: "tb-sep" }),
+  rbButton("blockquote", "Citation", "Citation", () => rich.commands.blockquote()),
+  rbButton("hr", "Separateur", "Ligne de separation", () => rich.commands.horizontalRule()),
+  el("div", { class: "tb-sep" }),
+  rbButton("link", "Lien", "Inserer un lien (Ctrl+K)", () => rich.commands.link()),
+  rbButton("image", "Image", "Inserer une image", () => rich.commands.image()),
+  rbButton("table", "Tableau", "Inserer un tableau", () => rich.commands.table()),
+);
+
+// Operations de tableau : n'apparaissent que lorsque le curseur y est, pour
+// eviter un ruban encombre de commandes inertes.
+const tableTools = el("span", { class: "rb-group hidden" },
+  el("div", { class: "tb-sep" }),
+  button("+Col", "Ajouter une colonne", () => rich.commands.addColumn(), "rb-btn"),
+  button("+Lig", "Ajouter une ligne", () => rich.commands.addRow(), "rb-btn"),
+  button("−Col", "Supprimer la colonne", () => rich.commands.deleteColumn(), "rb-btn"),
+  button("−Lig", "Supprimer la ligne", () => rich.commands.deleteRow(), "rb-btn"),
+  button("×", "Supprimer le tableau", () => rich.commands.deleteTable(), "rb-btn"),
+);
+ribbon.append(tableTools);
+
 // --- panneaux ---------------------------------------------------------------
 
 const editorHost = el("div", { class: "pane pane-editor" });
 const preview = el("article", { class: "md", id: "preview" });
-const previewHost = el("section", { class: "pane pane-preview" }, preview);
+const richHost = el("div", { class: "md md-rich hidden", id: "rich" });
+const previewHost = el("section", { class: "pane pane-preview" }, preview, richHost);
 const divider = el("div", { class: "divider", role: "separator", "aria-orientation": "vertical" });
 const panes = el("main", { class: "panes" }, editorHost, divider, previewHost);
 
@@ -305,13 +320,11 @@ const statusbar = el("footer", { class: "sb" },
   el("span", { class: "sb-spacer" }),
   sbMsg, sbCounts, sbMode);
 
-app.append(toolbar, panes, statusbar, fileInput);
+app.append(toolbar, ribbon, panes, statusbar, fileInput);
 
 /* ===========================================================================
- * Editeur CodeMirror
+ * Panneau source (CodeMirror)
  * ======================================================================== */
-
-const renderScheduler = { timer: 0 };
 
 const view = new EditorView({
   parent: editorHost,
@@ -335,12 +348,13 @@ const view = new EditorView({
       cmTheme,
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) scheduleRender();
+        if (u.docChanged) onSourceChanged();
       }),
     ],
   }),
 });
 
+/** Texte du panneau source. Ne declenche aucune synchronisation. */
 function text() {
   return view.state.doc.toString();
 }
@@ -350,7 +364,7 @@ function initialDoc() {
     const draft = store.get(KEY.draft);
     if (draft !== null) {
       state.fileName = store.get(KEY.draftName) || state.fileName;
-      state.savedText = " "; // force l'etat « modifie » : le disque ne contient pas ce texte
+      state.savedText = " "; // force l'etat « modifie » : le disque ne contient pas ce texte
       return draft;
     }
   }
@@ -359,22 +373,102 @@ function initialDoc() {
 }
 
 /* ===========================================================================
+ * Panneau rendu (ProseMirror)
+ * ======================================================================== */
+
+const rich = createRichEditor({
+  parent: richHost,
+  onChange: onRichChanged,
+  onState: updateRibbon,
+});
+
+/* ===========================================================================
+ * Synchronisation
+ *
+ * Le texte de CodeMirror fait foi : c'est lui qu'on enregistre, qu'on exporte
+ * et qu'on compare pour savoir si le document est modifie. L'editeur riche
+ * s'aligne dessus, et lui renvoie ses propres modifications.
+ *
+ * Deux precautions rendent l'ensemble stable :
+ *   - le drapeau `syncing` empeche qu'une mise a jour provoquee par un panneau
+ *     ne revienne le modifier en retour ;
+ *   - le panneau qui a le focus est celui qui a raison. Sans cette regle, une
+ *     source regeneree viendrait ecraser la frappe en cours.
+ * ======================================================================== */
+
+let syncing = false;
+let toRichTimer = 0;
+let toSourceTimer = 0;
+let renderTimer = 0;
+
+function onSourceChanged() {
+  updateStatus();
+  if (syncing) return; // la modification vient de l'editeur riche
+
+  if (state.autosave) persistDraft(text());
+  if (state.richMode) {
+    if (rich.hasFocus()) return; // l'utilisateur ecrit a droite : ne pas l'ecraser
+    clearTimeout(toRichTimer);
+    toRichTimer = setTimeout(pushToRich, 200);
+  } else {
+    scheduleRender();
+  }
+}
+
+function onRichChanged() {
+  clearTimeout(toSourceTimer);
+  toSourceTimer = setTimeout(flushRich, 150);
+}
+
+function pushToRich() {
+  if (!state.richMode || rich.hasFocus()) return;
+  syncing = true;
+  rich.setMarkdown(text());
+  syncing = false;
+}
+
+/**
+ * Repercute immediatement les modifications de l'editeur riche dans la source.
+ * Appelee avant tout ce qui lit le document : enregistrement, export, bascule
+ * de mode, fermeture de l'onglet.
+ */
+function flushRich() {
+  clearTimeout(toSourceTimer);
+  if (!state.richMode) return;
+
+  const markdown = rich.getMarkdown();
+  if (markdown === text()) return;
+
+  syncing = true;
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: markdown } });
+  syncing = false;
+
+  updateStatus();
+  if (state.autosave) persistDraft(markdown);
+}
+
+/** Contenu canonique du document, editeur riche compris. */
+function documentText() {
+  flushRich();
+  return text();
+}
+
+/* ===========================================================================
  * Rendu et etat visuel
  * ======================================================================== */
 
 function scheduleRender() {
-  clearTimeout(renderScheduler.timer);
-  renderScheduler.timer = setTimeout(render, 120);
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(render, 120);
 }
 
 function render() {
-  const src = text();
-  preview.innerHTML = renderMarkdown(src);
-  updateStatus(src);
-  if (state.autosave) persistDraft(src);
+  if (state.richMode) return; // le panneau de lecture est masque
+  preview.innerHTML = renderMarkdown(text());
 }
 
-function updateStatus(src = text()) {
+function updateStatus() {
+  const src = text();
   const words = (src.match(/\S+/g) || []).length;
   sbCounts.textContent = `${words} mot${words > 1 ? "s" : ""} - ${src.length} car. - ${view.state.doc.lines} lignes`;
 
@@ -401,8 +495,23 @@ function persistDraft(src) {
   if (!ok) flash("Brouillon non enregistre (stockage indisponible ou plein)", "dirty");
 }
 
+/** Reflete dans le ruban l'etat du curseur de l'editeur riche. */
+function updateRibbon(status = rich.status()) {
+  if (!state.richMode) return;
+
+  blockSelect.value = status.block;
+  for (const key of ["strong", "em", "strikethrough", "code", "link",
+                     "bullet_list", "ordered_list", "task", "blockquote"]) {
+    if (rb[key]) rb[key].setAttribute("aria-pressed", String(Boolean(status[key])));
+  }
+  rb.undo.disabled = !status.canUndo;
+  rb.redo.disabled = !status.canRedo;
+  rb.outdent.disabled = !status.inList;
+  tableTools.classList.toggle("hidden", !status.inTable);
+}
+
 /* ===========================================================================
- * Mode d'affichage, theme, redimensionnement
+ * Modes d'affichage, theme, redimensionnement
  * ======================================================================== */
 
 function setView(mode) {
@@ -411,8 +520,43 @@ function setView(mode) {
     b.setAttribute("aria-pressed", String(k === mode));
   }
   store.set(KEY.view, mode);
-  sbMode.textContent = { editor: "Editeur", split: "Vue partagee", preview: "Apercu" }[mode];
+  sbMode.textContent = { editor: "Source", split: "Vue partagee", preview: "Rendu" }[mode];
   if (mode !== "preview") view.requestMeasure();
+  if (mode !== "editor" && state.richMode) pushToRich();
+}
+
+function toggleRich() {
+  setRichMode(!state.richMode);
+}
+
+function setRichMode(on) {
+  if (on === state.richMode) return;
+
+  // Sortir du mode riche sans repercuter ses modifications les perdrait.
+  if (!on) flushRich();
+
+  state.richMode = on;
+  store.set(KEY.rich, on ? "1" : "0");
+
+  btnRich.setAttribute("aria-pressed", String(on));
+  ribbon.classList.toggle("hidden", !on);
+  preview.classList.toggle("hidden", on);
+  richHost.classList.toggle("hidden", !on);
+
+  if (on) {
+    syncing = true;
+    rich.setMarkdown(text());
+    syncing = false;
+    if (panes.dataset.view === "editor") setView("split");
+    rich.focus();
+    updateRibbon();
+  } else {
+    render();
+  }
+
+  flash(on
+    ? "Edition du rendu active - la source sera regeneree"
+    : "Retour a l'apercu en lecture");
 }
 
 function setTheme(theme) {
@@ -452,20 +596,22 @@ divider.addEventListener("pointerdown", (e) => {
 
 // Defilement synchronise, proportionnel. Le drapeau evite la boucle de retour
 // entre les deux panneaux.
-let syncing = false;
+let scrollSyncing = false;
 function linkScroll(from, to) {
   from.addEventListener("scroll", () => {
-    if (syncing || panes.dataset.view !== "split") return;
+    if (scrollSyncing || panes.dataset.view !== "split") return;
     const fromMax = from.scrollHeight - from.clientHeight;
     const toMax = to.scrollHeight - to.clientHeight;
     if (fromMax <= 0 || toMax <= 0) return;
-    syncing = true;
+    scrollSyncing = true;
     to.scrollTop = (from.scrollTop / fromMax) * toMax;
-    requestAnimationFrame(() => { syncing = false; });
+    requestAnimationFrame(() => { scrollSyncing = false; });
   }, { passive: true });
 }
 linkScroll(view.scrollDOM, preview);
 linkScroll(preview, view.scrollDOM);
+linkScroll(view.scrollDOM, richHost);
+linkScroll(richHost, view.scrollDOM);
 
 /* ===========================================================================
  * Entrees / sorties fichier
@@ -482,14 +628,20 @@ const FILE_TYPES = [{
 }];
 
 function setDoc(content, name) {
+  syncing = true;
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: content },
     selection: { anchor: 0 },
   });
+  syncing = false;
+
   if (name) state.fileName = name;
   state.savedText = content;
   view.scrollDOM.scrollTop = 0;
-  render();
+
+  if (state.richMode) rich.setMarkdown(content);
+  else render();
+  updateStatus();
 }
 
 async function doOpen() {
@@ -520,7 +672,7 @@ async function onFileInputChange() {
 }
 
 async function doSave() {
-  const content = text();
+  const content = documentText();
 
   if (state.fileHandle) {
     try {
@@ -540,7 +692,7 @@ async function doSave() {
 }
 
 async function doSaveAs() {
-  const content = text();
+  const content = documentText();
 
   if (hasFSA && typeof window.showSaveFilePicker === "function") {
     try {
@@ -574,7 +726,7 @@ async function doNew() {
   state.fileHandle = null;
   state.fileName = "sans-titre.md";
   setDoc("", state.fileName);
-  view.focus();
+  (state.richMode ? rich : view).focus();
 }
 
 // Le telechargement passe par un Blob local : aucune requete reseau, donc rien
@@ -589,7 +741,7 @@ function download(content, type, filename) {
 }
 
 async function confirmDiscard() {
-  if (text() === state.savedText) return true;
+  if (documentText() === state.savedText) return true;
   return window.confirm("Le document contient des modifications non enregistrees. Continuer et les perdre ?");
 }
 
@@ -605,7 +757,7 @@ function baseName() {
 // peut ni charger ni contacter quoi que ce soit, meme ouvert ailleurs.
 function doExportHtml() {
   const title = baseName();
-  const body = renderMarkdown(text());
+  const body = renderMarkdown(documentText());
   const css = document.getElementById("app-css").textContent;
   const theme = document.documentElement.dataset.theme || "light";
 
@@ -686,7 +838,7 @@ function onAutosaveToggle() {
   store.set(KEY.autosave, state.autosave ? "1" : "0");
 
   if (state.autosave) {
-    persistDraft(text());
+    persistDraft(documentText());
     flash("Brouillon local actif - le contenu est ecrit en clair sur ce poste", "dirty");
   } else {
     store.del(KEY.draft);
@@ -737,6 +889,16 @@ function showAbout() {
       <li>comparez son condensat SHA-256 a celui publie pour la version utilisee.</li>
     </ul>
 
+    <h3>Les deux modes d'edition</h3>
+    <p>Le bouton <b>Edition</b> rend le document affiche a droite directement
+    modifiable, avec un ruban de mise en forme. Le texte source est alors
+    <em>regenere</em> a partir du document : la mise en forme est preservee,
+    mais vos conventions d'ecriture sont normalisees (<code>*</code> devient
+    <code>-</code>, les titres soulignes deviennent des <code>#</code>). Tant
+    que vous n'activez pas ce mode, la source reste intacte au caractere pres.</p>
+    <p>Le HTML brut place dans le Markdown est conserve tel quel, mais n'est pas
+    modifiable dans le rendu : editez-le dans le panneau source.</p>
+
     <h3>Stockage</h3>
     <p>Par defaut, <b>rien</b> n'est conserve : ni brouillon, ni historique. La
     case <b>Brouillon local</b> ecrit le document en clair dans le
@@ -746,7 +908,7 @@ function showAbout() {
     <h3>Raccourcis</h3>
     <ul>
       <li><code>Ctrl</code>+<code>O</code> ouvrir &mdash; <code>Ctrl</code>+<code>S</code> enregistrer &mdash; <code>Ctrl</code>+<code>Maj</code>+<code>S</code> enregistrer sous</li>
-      <li><code>Ctrl</code>+<code>Z</code> / <code>Ctrl</code>+<code>Y</code> annuler et retablir</li>
+      <li>Dans le rendu : <code>Ctrl</code>+<code>B</code> gras, <code>Ctrl</code>+<code>I</code> italique, <code>Ctrl</code>+<code>K</code> lien, <code>Tab</code> cellule suivante</li>
     </ul>
   `;
   const ok = button("Fermer", "Fermer", close);
@@ -781,6 +943,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("beforeunload", (e) => {
+  flushRich();
   if (text() !== state.savedText && !state.autosave) {
     e.preventDefault();
     e.returnValue = "";
@@ -801,8 +964,19 @@ const savedSplit = store.get(KEY.split);
 if (savedSplit) panes.style.setProperty("--split", savedSplit);
 
 refreshDraftUi();
+updateStatus();
 render();
-view.focus();
+
+// `setRichMode` compare a l'etat courant : on part de false pour que la
+// preference enregistree soit reellement appliquee.
+if (state.richMode) {
+  state.richMode = false;
+  setRichMode(true);
+} else {
+  btnRich.setAttribute("aria-pressed", "false");
+  ribbon.classList.add("hidden");
+  view.focus();
+}
 
 if (!hasFSA) {
   flash("Ce navigateur n'a pas l'API fichier : l'enregistrement passe par un telechargement");

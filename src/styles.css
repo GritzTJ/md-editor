@@ -79,12 +79,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Colonne flex plutot que grille : le ruban de mise en forme apparait et
+   disparait selon le mode, et une grille a rangees fixes attribuerait le `1fr`
+   au mauvais enfant selon leur nombre. */
 #app {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }
+
+.tb, .rb, .sb { flex: 0 0 auto; }
 
 /* ------------------------------ barre d'outils ------------------------------ */
 
@@ -166,6 +171,7 @@ input:focus-visible {
 
 .panes {
   display: grid;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -310,8 +316,213 @@ input:focus-visible {
   background: var(--bg-alt);
 }
 
-.md input[type="checkbox"] { margin-right: .4em; }
-.md li.task-list-item { list-style: none; margin-left: -1.4em; }
+/* --- cases a cocher -------------------------------------------------------
+   L'apercu et l'editeur riche produisent la meme structure -- un <li> portant
+   data-checked, suivi d'un <span class="task-check"> -- afin de partager ces
+   regles. La case est dessinee en CSS : un <input> obligerait a autoriser une
+   balise de formulaire dans l'assainissement, et les caracteres Unicode de
+   case a cocher s'affichent mal selon les polices. */
+
+.md li.task-item {
+  list-style: none;
+  margin-left: -1.45em;
+  display: flex;
+  align-items: flex-start;
+  gap: .55em;
+}
+
+.task-check {
+  flex: none;
+  width: .95em;
+  height: .95em;
+  margin-top: .3em;
+  border: 1.5px solid var(--fg-muted);
+  border-radius: 3px;
+  position: relative;
+  cursor: pointer;
+}
+
+.md li.task-item[data-checked="true"] > .task-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.md li.task-item[data-checked="true"] > .task-check::after {
+  content: "";
+  position: absolute;
+  left: 31%;
+  top: 8%;
+  width: 26%;
+  height: 55%;
+  border: solid var(--accent-fg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* En mode riche le corps de l'element est enveloppe, pour que le curseur ne
+   puisse pas se placer sur la case elle-meme. */
+.task-body { flex: 1 1 auto; min-width: 0; }
+.md li.task-item > .task-body > :last-child { margin-bottom: 0; }
+
+/* --- HTML brut ------------------------------------------------------------
+   Non modifiable dans le rendu, mais conserve tel quel a la sauvegarde : il
+   est donc affiche comme un bloc distinct plutot que masque. */
+
+.md .raw-html,
+.md .raw-html-inline {
+  background: var(--bg-inset);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: .85em;
+}
+
+.md .raw-html { padding: 8px 12px; white-space: pre-wrap; }
+.md .raw-html-inline { padding: .05em .35em; }
+
+/* ------------------------------ ruban de mise en forme ------------------------------ */
+
+.rb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.rb-group { display: contents; }
+
+.rb-btn {
+  min-width: 30px;
+  padding: 3px 8px;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.rb-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.rb-btn:disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+.rb-btn:disabled:hover { background: var(--bg); }
+
+.rb-bold { font-weight: 800; }
+.rb-italic { font-style: italic; font-family: Georgia, serif; }
+.rb-strike { text-decoration: line-through; }
+.rb-mono { font-family: var(--font-mono); font-size: .85em; }
+
+.rb-select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+/* ------------------------------ editeur riche (ProseMirror) ------------------------------ */
+
+.md-rich { cursor: text; }
+
+.ProseMirror {
+  outline: none;
+  min-height: 100%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-variant-ligatures: none;
+}
+
+.ProseMirror > :first-child { margin-top: 0; }
+.ProseMirror li { position: relative; }
+.ProseMirror-hideselection *::selection { background: transparent; }
+.ProseMirror-hideselection { caret-color: transparent; }
+
+.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+li.ProseMirror-selectednode { outline: none; }
+
+li.ProseMirror-selectednode::after {
+  content: "";
+  position: absolute;
+  inset: -2px -2px -2px -32px;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+/* Curseur affiche entre deux blocs non textuels (avant un tableau en tete de
+   document, par exemple), sans lequel ils seraient inatteignables au clavier. */
+.ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+
+.ProseMirror-gapcursor::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid var(--fg);
+  animation: pm-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes pm-blink { to { visibility: hidden; } }
+
+.ProseMirror-focused .ProseMirror-gapcursor,
+.ProseMirror-gapcursor:has(*) { display: block; }
+
+/* Tableaux modifiables : la largeur fixe est indispensable, ProseMirror
+   calculant les positions de colonne a partir du modele. */
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  overflow: hidden;
+  display: table;
+}
+
+.ProseMirror td, .ProseMirror th {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  vertical-align: top;
+  position: relative;
+}
+
+.ProseMirror th { background: var(--bg-alt); font-weight: 600; }
+
+.ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  pointer-events: none;
+}
+
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.ProseMirror.resize-cursor { cursor: col-resize; }
 
 /* ------------------------------ barre d'etat ------------------------------ */
 
