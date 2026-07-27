@@ -428,10 +428,21 @@ function onRichChanged() {
 
 function pushToRich() {
   if (!state.richMode || rich.hasFocus()) return;
+
+  // Remplacer le document reinitialise la selection et l'historique de
+  // l'editeur riche : autant s'en abstenir quand il contient deja ce texte.
+  const current = text();
+  if (rich.getMarkdown() === current) return;
+
   syncing = true;
-  rich.setMarkdown(text());
+  rich.setMarkdown(current);
   syncing = false;
 }
+
+// Le minuteur de synchronisation a pu etre arme alors que l'editeur riche
+// n'avait pas encore le focus. Sans cette annulation, il se declencherait juste
+// apres un clic dedans et emporterait la selection en cours.
+richHost.addEventListener("focusin", () => clearTimeout(toRichTimer));
 
 /**
  * Repercute immediatement les modifications de l'editeur riche dans la source.
