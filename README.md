@@ -51,7 +51,7 @@ curl -s https://votre-instance/index.html.sha256
 ## Démarrage
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/OWNER/md-editor:latest
+docker run --rm -p 8080:8080 ghcr.io/GritzTJ/md-editor:latest
 ```
 
 Puis <http://localhost:8080>.
@@ -69,7 +69,7 @@ L'image est publiée pour `linux/amd64` et `linux/arm64`. Elle expose le port
 ### Vérifier l'origine de l'image
 
 ```bash
-gh attestation verify oci://ghcr.io/OWNER/md-editor:latest --repo OWNER/md-editor
+gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-editor
 ```
 
 ---
@@ -158,7 +158,7 @@ fichier autonome démarre en `file://` sans emporter le document en cours.
 complet à chaque `npm install`. Pour tester l'image plutôt que le build local :
 
 ```bash
-docker run -d -p 8080:8080 ghcr.io/OWNER/md-editor:latest
+docker run -d -p 8080:8080 ghcr.io/GritzTJ/md-editor:latest
 TARGET=http://localhost:8080/ node test/browser.mjs
 ```
 

@@ -2,7 +2,7 @@
 # volume : un systeme de fichiers en lecture seule suffit.
 services:
   md-editor:
-    image: ghcr.io/OWNER/md-editor:latest
+    image: ghcr.io/GritzTJ/md-editor:latest
     # Pour construire localement au lieu de tirer l'image publiee :
     # build: .
     ports:
