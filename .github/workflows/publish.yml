@@ -141,10 +141,22 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # The package may inherit the repository's visibility, but not always, so
+      # authenticate rather than depend on it.
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Start the container and check the headers
         run: |
           set -euo pipefail
-          IMAGE="${REGISTRY}/${IMAGE_NAME}:sha-${GITHUB_SHA}"
+          # A registry reference has to be lower case, and `github.repository`
+          # keeps the owner's original casing. docker/metadata-action folds it
+          # for the build; this step is hand-written and has to do it itself.
+          IMAGE="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]'):sha-${GITHUB_SHA}"
           docker run -d --name md-editor -p 8080:8080 "$IMAGE"
           for i in $(seq 1 30); do
             curl -sf http://localhost:8080/healthz >/dev/null && break || sleep 1
