@@ -12,8 +12,8 @@
  * "Download app" button) trivial and unable to leak the user's document.
  *
  * The document is edited two ways: as source in CodeMirror, and as rendered
- * output in ProseMirror. The CodeMirror text is always authoritative; see the
- * "Synchronisation" section for how the two are kept aligned.
+ * output in ProseMirror. The CodeMirror text is always authoritative, and the
+ * two surfaces are never on screen together -- see "Synchronisation".
  * ------------------------------------------------------------------------- */
 
 import { EditorState } from "@codemirror/state";
@@ -51,8 +51,7 @@ import { createRichEditor } from "./rich.js";
 
 const KEY = {
   theme: "mdedit.theme",
-  view: "mdedit.view",
-  rich: "mdedit.rich",
+  editing: "mdedit.editing",
   split: "mdedit.split",
   autosave: "mdedit.autosave",
   draft: "mdedit.draft",
@@ -124,7 +123,7 @@ const state = {
   fileName: "untitled.md",
   savedText: "", // reference content for the "modified" indicator
   autosave: store.get(KEY.autosave) === "1",
-  richMode: store.get(KEY.rich) === "1",
+  editing: store.get(KEY.editing) === "1", // editing the rendered document
 };
 
 const SAMPLE = `# Local Markdown editor
@@ -184,18 +183,11 @@ const btnSave = button("Save", "Save (Ctrl+S)", doSave);
 const btnSaveAs = button("Save as", "Save under a different name (Ctrl+Shift+S)", doSaveAs);
 const btnNew = button("New", "Empty the editor", doNew);
 
-// "Source" rather than "Editor": its neighbour is an edit toggle, and two
-// near-identical labels for two different notions -- a layout and a mode --
-// could only cause confusion.
-const viewButtons = {
-  editor: button("Source", "Show the source text only", () => setView("editor")),
-  split: button("Split", "Show source and preview side by side", () => setView("split")),
-  preview: button("Preview", "Show the rendered document only", () => setView("preview")),
-};
-const segView = el("div", { class: "seg", role: "group", "aria-label": "Layout" },
-  viewButtons.editor, viewButtons.split, viewButtons.preview);
-
-const btnRich = button("Edit preview", "Write directly in the rendered document", toggleRich);
+// There is no layout control any more. Source and live preview are always side
+// by side; the only other state is editing the rendered document, and that
+// takes the full width. One button, two states, no way for a layout choice and
+// a mode choice to contradict each other.
+const btnEdit = button("Edit preview", "Write directly in the rendered document", toggleEditing);
 
 const btnExport = button("Export HTML", "Save the rendered document as standalone HTML", doExportHtml);
 const btnStandalone = button("Download app",
@@ -219,9 +211,7 @@ const toolbar = el("header", { class: "tb" },
   el("div", { class: "tb-sep" }),
   btnNew,
   el("div", { class: "tb-sep" }),
-  segView,
-  el("div", { class: "tb-sep" }),
-  btnRich,
+  btnEdit,
   el("div", { class: "tb-sep" }),
   btnExport, btnStandalone,
   el("div", { class: "tb-spacer" }),
@@ -314,13 +304,12 @@ const panes = el("main", { class: "panes" }, editorHost, divider, previewHost);
 const sbName = el("b", { text: state.fileName });
 const sbDirty = el("span", { text: "" });
 const sbCounts = el("span", { text: "" });
-const sbMode = el("span", { text: "" });
 const sbMsg = el("span", { text: "" });
 
 const statusbar = el("footer", { class: "sb" },
   sbName, sbDirty,
   el("span", { class: "sb-spacer" }),
-  sbMsg, sbCounts, sbMode);
+  sbMsg, sbCounts);
 
 app.append(toolbar, ribbon, panes, statusbar, fileInput);
 
@@ -388,80 +377,62 @@ const rich = createRichEditor({
  * Synchronisation
  *
  * The CodeMirror text is authoritative: it is what gets saved, exported, and
- * compared to decide whether the document is modified. The rich editor aligns
- * onto it, and pushes its own edits back.
+ * compared to decide whether the document is modified.
  *
- * Two precautions keep this stable:
- *   - the `syncing` flag stops an update caused by one pane from bouncing back
- *     into it;
- *   - the focused pane wins. Without that rule, a regenerated source would
- *     overwrite whatever is being typed.
+ * The two surfaces are never visible at the same time -- editing the rendered
+ * document takes the full width -- so there is no bidirectional sync to
+ * arbitrate. The source flows into the rich editor when that mode opens, and
+ * back out while it is open. Nothing else writes the source in the meantime,
+ * which removes the whole class of races that a live split would create.
  * ======================================================================== */
 
-let syncing = false;
-let toRichTimer = 0;
-let toSourceTimer = 0;
+let pullTimer = 0;
 let renderTimer = 0;
 
 function onSourceChanged() {
   updateStatus();
-  if (syncing) return; // the change came from the rich editor
+
+  // While the rendered document is being edited, the source pane is hidden and
+  // the only thing writing to it is pullFromRich, which does its own
+  // bookkeeping.
+  if (state.editing) return;
 
   if (state.autosave) persistDraft(text());
-  if (state.richMode) {
-    if (rich.hasFocus()) return; // the user is typing on the right: leave it alone
-    clearTimeout(toRichTimer);
-    toRichTimer = setTimeout(pushToRich, 200);
-  } else {
-    scheduleRender();
-  }
+  scheduleRender();
 }
 
+// The draft and the word count should not wait for the user to leave edit
+// mode, so the rendered document is serialised as it is typed. This direction
+// is one-way and cannot clobber anything: the source pane is not on screen.
 function onRichChanged() {
-  clearTimeout(toSourceTimer);
-  toSourceTimer = setTimeout(flushRich, 150);
+  clearTimeout(pullTimer);
+  pullTimer = setTimeout(pullFromRich, 300);
 }
 
+/** Source -> rendered document. Only when entering edit mode. */
 function pushToRich() {
-  if (!state.richMode || rich.hasFocus()) return;
-
-  // Replacing the document resets the rich editor's selection and history, so
-  // skip it when that editor already holds this text.
-  const current = text();
-  if (rich.getMarkdown() === current) return;
-
-  syncing = true;
-  rich.setMarkdown(current);
-  syncing = false;
+  rich.setMarkdown(text());
 }
-
-// The sync timer may have been armed while the rich editor was not yet
-// focused. Without this cancellation it would fire just after a click into it
-// and take the current selection with it.
-richHost.addEventListener("focusin", () => clearTimeout(toRichTimer));
 
 /**
- * Push pending rich-editor changes into the source immediately. Called before
- * anything that reads the document: save, export, mode switch, tab close.
+ * Rendered document -> source. Called while editing, when leaving edit mode,
+ * and before anything that reads the document: save, export, tab close.
  */
-function flushRich() {
-  clearTimeout(toSourceTimer);
-  if (!state.richMode) return;
+function pullFromRich() {
+  clearTimeout(pullTimer);
+  if (!state.editing) return;
 
   const markdown = rich.getMarkdown();
   if (markdown === text()) return;
 
-  syncing = true;
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: markdown } });
-  syncing = false;
-
   updateStatus();
   if (state.autosave) persistDraft(markdown);
 }
 
-/** Canonical document content, rich editor included. */
+/** Canonical document content, rendered editor included. */
 function documentText() {
-  flushRich();
+  pullFromRich();
   return text();
 }
 
@@ -475,7 +446,7 @@ function scheduleRender() {
 }
 
 function render() {
-  if (state.richMode) return; // the read-only pane is hidden
+  if (state.editing) return; // the read-only pane is hidden
   preview.innerHTML = renderMarkdown(text());
 }
 
@@ -509,7 +480,7 @@ function persistDraft(src) {
 
 /** Mirror the rich editor's cursor context in the ribbon. */
 function updateRibbon(status = rich.status()) {
-  if (!state.richMode) return;
+  if (!state.editing) return;
 
   blockSelect.value = status.block;
   for (const key of ["strong", "em", "strikethrough", "code", "link",
@@ -526,80 +497,47 @@ function updateRibbon(status = rich.status()) {
  * Layout, editing mode, theme, resizing
  * ======================================================================== */
 
-/** Is the preview actually on screen? In "Source" layout it is hidden. */
-function richPaneVisible() {
-  return state.richMode && panes.dataset.view !== "editor";
+function toggleEditing() {
+  setEditing(!state.editing);
 }
 
 /**
- * Align the interface with the current layout and mode.
+ * Switch between the split view and editing the rendered document.
  *
- * Layout and editing mode are two independent settings, and neither changes
- * the other: when the preview is not on screen the toggle is simply disabled.
- * Hijacking it to change the layout would undo an explicit user choice without
- * ever restoring it.
+ * These are the only two states. Editing takes the full width because a
+ * formatting ribbon over a half-width column is cramped -- and because keeping
+ * the two surfaces apart is what makes the synchronisation a pair of
+ * transitions rather than a live negotiation.
  */
-function applyPaneMode() {
-  const sourceOnly = panes.dataset.view === "editor";
+function setEditing(on) {
+  if (on === state.editing) return;
 
-  btnRich.disabled = sourceOnly;
-  btnRich.setAttribute("aria-pressed", String(state.richMode));
-  btnRich.title = sourceOnly
-    ? "Show the preview (Split or Preview) to edit it"
+  // Leaving without pushing the changes down would lose them.
+  if (!on) pullFromRich();
+
+  state.editing = on;
+  store.set(KEY.editing, on ? "1" : "0");
+
+  panes.classList.toggle("editing", on);
+  preview.classList.toggle("hidden", on);
+  richHost.classList.toggle("hidden", !on);
+  ribbon.classList.toggle("hidden", !on);
+
+  btnEdit.textContent = on ? "Back to split" : "Edit preview";
+  btnEdit.title = on
+    ? "Return to the source and live preview"
     : "Write directly in the rendered document";
-
-  const showRich = richPaneVisible();
-  ribbon.classList.toggle("hidden", !showRich);
-  preview.classList.toggle("hidden", state.richMode);
-  richHost.classList.toggle("hidden", !state.richMode);
-  if (showRich) updateRibbon();
-}
-
-function setView(mode) {
-  // The preview is about to disappear: its pending edits must reach the source
-  // before it stops being visible.
-  if (mode === "editor" && state.richMode) flushRich();
-
-  panes.dataset.view = mode;
-  for (const [k, b] of Object.entries(viewButtons)) {
-    b.setAttribute("aria-pressed", String(k === mode));
-  }
-  store.set(KEY.view, mode);
-  sbMode.textContent = { editor: "Source", split: "Split view", preview: "Preview" }[mode];
-
-  applyPaneMode();
-  if (mode !== "preview") view.requestMeasure();
-  if (mode !== "editor" && state.richMode) pushToRich();
-}
-
-function toggleRich() {
-  setRichMode(!state.richMode);
-}
-
-function setRichMode(on) {
-  if (on === state.richMode) return;
-
-  // Leaving rich mode without pushing its changes down would lose them.
-  if (!on) flushRich();
-
-  state.richMode = on;
-  store.set(KEY.rich, on ? "1" : "0");
-  applyPaneMode();
+  btnEdit.setAttribute("aria-pressed", String(on));
 
   if (on) {
-    syncing = true;
-    rich.setMarkdown(text());
-    syncing = false;
+    pushToRich();
     updateRibbon();
     rich.focus();
   } else {
     render();
+    view.requestMeasure();
     view.focus();
   }
-
-  flash(on
-    ? "Preview editing on — the source will be regenerated"
-    : "Back to read-only preview");
 }
 
 function setTheme(theme) {
@@ -637,11 +575,13 @@ divider.addEventListener("pointerdown", (e) => {
   divider.addEventListener("pointerup", onUp);
 });
 
-// Proportional scroll sync. The flag prevents a feedback loop between panes.
+// Proportional scroll sync between the source and the live preview. The flag
+// prevents a feedback loop. Nothing is needed for the rendered editor: it is
+// alone on screen, so there is no second pane to follow.
 let scrollSyncing = false;
 function linkScroll(from, to) {
   from.addEventListener("scroll", () => {
-    if (scrollSyncing || panes.dataset.view !== "split") return;
+    if (scrollSyncing) return;
     const fromMax = from.scrollHeight - from.clientHeight;
     const toMax = to.scrollHeight - to.clientHeight;
     if (fromMax <= 0 || toMax <= 0) return;
@@ -652,8 +592,6 @@ function linkScroll(from, to) {
 }
 linkScroll(view.scrollDOM, preview);
 linkScroll(preview, view.scrollDOM);
-linkScroll(view.scrollDOM, richHost);
-linkScroll(richHost, view.scrollDOM);
 
 /* ===========================================================================
  * File input / output
@@ -675,18 +613,18 @@ const FILE_TYPES = [{
 }];
 
 function setDoc(content, name) {
-  syncing = true;
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: content },
     selection: { anchor: 0 },
   });
-  syncing = false;
 
   if (name) state.fileName = name;
   state.savedText = content;
   view.scrollDOM.scrollTop = 0;
 
-  if (state.richMode) rich.setMarkdown(content);
+  // Whichever surface is on screen has to be refreshed: `onSourceChanged`
+  // steps aside while editing, and the rendered editor is not fed by it.
+  if (state.editing) pushToRich();
   else render();
   updateStatus();
 }
@@ -785,7 +723,7 @@ async function doNew() {
   state.fileHandle = null;
   state.fileName = "untitled.md";
   setDoc("", state.fileName);
-  (state.richMode ? rich : view).focus();
+  (state.editing ? rich : view).focus();
 }
 
 // Downloads go through a local Blob: no network request, so nothing the CSP
@@ -958,8 +896,8 @@ function showAbout() {
     </ul>
 
     <h3>The two editing modes</h3>
-    <p><b>Edit preview</b> makes the rendered document on the right directly
-    editable, with a formatting ribbon. The source text is then
+    <p><b>Edit preview</b> replaces the split view with the rendered document
+    alone, directly editable, with a formatting ribbon. The source text is then
     <em>regenerated</em> from the document: the formatting is preserved, but
     your writing conventions are normalised (<code>*</code> becomes
     <code>-</code>, underlined headings become <code>#</code>). As long as you
@@ -1014,7 +952,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("beforeunload", (e) => {
-  flushRich();
+  pullFromRich();
   if (text() !== state.savedText && !state.autosave) {
     e.preventDefault();
     e.returnValue = "";
@@ -1029,18 +967,23 @@ setTheme(
   store.get(KEY.theme) ||
   (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
 );
-setView(store.get(KEY.view) || "split");
-
 const savedSplit = store.get(KEY.split);
 if (savedSplit) panes.style.setProperty("--split", savedSplit);
 
 refreshDraftUi();
 updateStatus();
-
-// `setView` has already applied the layout, the mode and, where relevant,
-// pushed the document into the rich editor.
 render();
-if (richPaneVisible()) rich.focus(); else view.focus();
+
+// `setEditing` compares against the current state, so start from the split
+// view and let the stored preference be applied for real.
+if (state.editing) {
+  state.editing = false;
+  setEditing(true);
+} else {
+  btnEdit.setAttribute("aria-pressed", "false");
+  ribbon.classList.add("hidden");
+  view.focus();
+}
 
 // Worth saying explicitly rather than letting the user discover that "Save"
 // only ever downloads: the cause is almost always the insecure origin.

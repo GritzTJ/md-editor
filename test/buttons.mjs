@@ -109,12 +109,10 @@ async function selectAllRich() {
 /* ========================= toolbar ========================= */
 console.log("\n--- toolbar ---");
 
-await click("Source");
-ok("Source", (await page.$eval(".pane-preview", (e) => getComputedStyle(e).display)) === "none");
-await click("Preview");
-ok("Preview", (await page.$eval(".pane-editor", (e) => getComputedStyle(e).display)) === "none");
-await click("Split");
-ok("Split", (await page.$eval(".pane-preview", (e) => getComputedStyle(e).display)) !== "none");
+// No layout control exists: source and live preview are always side by side.
+ok("split view by default",
+  (await page.$eval(".pane-editor", (e) => getComputedStyle(e).display)) !== "none" &&
+  (await page.$eval("#preview", (e) => getComputedStyle(e).display)) !== "none");
 
 const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
 await click("Theme");
@@ -161,8 +159,41 @@ await wait(300);
 
 /* ========================= formatting ribbon ========================= */
 console.log("\n--- formatting ribbon ---");
+
+const editing = () => page.$eval(".panes", (e) => e.classList.contains("editing"));
+
+/**
+ * Put a document in the source, then open the rendered editor on it.
+ *
+ * The source pane is hidden while the rendered document is being edited, so
+ * anything that writes to it has to happen before switching -- and reading the
+ * result means switching back. Every ribbon case therefore exercises both
+ * transitions, which is exactly how the feature is used.
+ */
+async function editRendered(md) {
+  if (await editing()) await click("Back to split");
+  await setSource(md);
+  await click("Edit preview");
+}
+
+/** Return to the split view and read the regenerated source. */
+async function splitAndRead() {
+  await click("Back to split");
+  return src();
+}
+
+async function selectAllRendered() {
+  await page.click("#rich .ProseMirror");
+  await wait(250);
+  await page.keyboard.down("Control"); await page.keyboard.press("KeyA"); await page.keyboard.up("Control");
+  await wait(150);
+}
+
 await click("Edit preview");
-await wait(400);
+ok("Edit preview", (await page.$("#rich .ProseMirror")) !== null &&
+  (await page.$eval(".pane-editor", (e) => getComputedStyle(e).display)) === "none");
+await click("Back to split");
+ok("Back to split", (await page.$eval(".pane-editor", (e) => getComputedStyle(e).display)) !== "none");
 
 // Each case selects the whole paragraph first: acting on a selection rather
 // than a bare cursor is what caught the "Tasks" bug.
@@ -176,64 +207,70 @@ for (const [label, expected] of [
   ["Tasks", /^-\s+\[ \]\s+plain text/m],
   ["Quote", /^>\s+plain text/m],
 ]) {
-  await setSource("plain text");
-  await selectAllRich();
+  await editRendered("plain text");
+  await selectAllRendered();
   await click(label);
-  const s = await src();
+  const s = await splitAndRead();
   ok(label, expected.test(s), JSON.stringify(s));
 }
 
-await setSource("before");
+await editRendered("before");
 await page.click("#rich .ProseMirror");
 await page.keyboard.press("End");
 await click("Divider");
-ok("Divider", /^(-{3,}|\*{3,}|_{3,})$/m.test(await src()), JSON.stringify(await src()));
+ok("Divider", /^(-{3,}|\*{3,}|_{3,})$/m.test(await splitAndRead()), JSON.stringify(await src()));
 
-await setSource("- alpha\n  - beta");
+await editRendered("- alpha\n  - beta");
 await page.click("#rich .ProseMirror");
 await wait(250);
 await page.keyboard.down("Control"); await page.keyboard.press("End"); await page.keyboard.up("Control");
 await click("Outdent");
+const outdented = await splitAndRead();
 ok("Outdent raises one level, it does not leave the list",
-  /^-\s+beta/m.test(await src()) && /^-\s+alpha/m.test(await src()), JSON.stringify(await src()));
+  /^-\s+beta/m.test(outdented) && /^-\s+alpha/m.test(outdented), JSON.stringify(outdented));
 
-await setSource("original");
-await selectAllRich();
+await editRendered("original");
+await selectAllRendered();
 await click("B");
-const bolded = await src();
 await click("Undo");
-ok("Undo", !/\*\*/.test(await src()) && (await src()) !== bolded, JSON.stringify(await src()));
-await click("Redo");
-ok("Redo", /\*\*original\*\*/.test(await src()), JSON.stringify(await src()));
+ok("Undo", !/\*\*/.test(await splitAndRead()), JSON.stringify(await src()));
 
-await setSource("heading text");
-await page.click("#rich .ProseMirror");
-await wait(250);
+await editRendered("original");
+await selectAllRendered();
+await click("B");
+await click("Undo");
+await click("Redo");
+ok("Redo", /\*\*original\*\*/.test(await splitAndRead()), JSON.stringify(await src()));
+
 for (const [value, expected] of [
   ["h1", /^#\s/m], ["h3", /^###\s/m], ["code", /^```/m], ["p", /^heading text$/m],
 ]) {
+  await editRendered("heading text");
+  await page.click("#rich .ProseMirror");
+  await wait(250);
   await page.select(".rb-select", value);
   await wait(450);
-  ok(`style selector: ${value}`, expected.test(await src()), JSON.stringify(await src()));
+  ok(`style selector: ${value}`, expected.test(await splitAndRead()), JSON.stringify(await src()));
 }
 
-await setSource("anchor");
-await selectAllRich();
+await editRendered("anchor");
+await selectAllRendered();
 answers = ["https://example.com"];
 await click("Link");
-ok("Link", /\[anchor\]\(https:\/\/example\.com\)/.test(await src()), JSON.stringify(await src()));
+ok("Link", /\[anchor\]\(https:\/\/example\.com\)/.test(await splitAndRead()), JSON.stringify(await src()));
 
-await setSource("");
+await editRendered("");
 await page.click("#rich .ProseMirror");
 answers = [DATA_IMAGE, "alt text"];
 await click("Image");
-ok("Image", (await src()).includes("![alt text](data:image/png;base64,"), JSON.stringify((await src()).slice(0, 60)));
 ok("a data: image really displays",
   (await page.$$eval("#rich img", (imgs) => imgs.filter((i) => i.complete && i.naturalWidth > 0).length)) === 1);
+ok("Image", (await splitAndRead()).includes("![alt text](data:image/png;base64,"),
+  JSON.stringify((await src()).slice(0, 60)));
 
 /* ========================= table tools ========================= */
 console.log("\n--- table tools ---");
-await setSource("");
+await editRendered("");
 await page.click("#rich .ProseMirror");
 await click("Table");
 
@@ -254,6 +291,8 @@ await click("−Row");
 ok("−Row", (await rows()) === r0, `-> ${await rows()}`);
 await click("×");
 ok("× deletes the table", (await page.$("#rich table")) === null);
+await click("Back to split");
+
 
 /* ========================= policy still holds ========================= */
 console.log("\n--- the policy is unchanged ---");

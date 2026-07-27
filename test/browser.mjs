@@ -197,13 +197,12 @@ ok("remote dynamic imports are blocked", blocked("https://example.test/mod.js"))
 console.log("\n--- interface ---");
 const display = (sel) => page.$eval(sel, (e) => getComputedStyle(e).display);
 
-await (await btn("Source")).click();
-ok("Source layout: the preview is hidden", (await display(".pane-preview")) === "none");
-await (await btn("Preview")).click();
-ok("Preview layout: the source is hidden", (await display(".pane-editor")) === "none");
-await (await btn("Split")).click();
-ok("Split layout: both panes are visible",
-  (await display(".pane-preview")) !== "none" && (await display(".pane-editor")) !== "none");
+// There is no layout control: source and live preview are always side by side.
+ok("source and live preview are shown side by side",
+  (await display(".pane-editor")) !== "none" && (await display("#preview")) !== "none");
+ok("no layout control is present", await page.evaluate(() =>
+  ![...document.querySelectorAll(".tb button")].some((b) =>
+    ["Source", "Split", "Preview"].includes(b.textContent))));
 
 const t0 = await page.evaluate(() => document.documentElement.dataset.theme);
 await (await btn("Theme")).click();
@@ -281,147 +280,152 @@ if (hasFSA) {
     asked !== null && /name/i.test(asked), String(asked));
 }
 
-/* ========================= 9. editing the preview ========================= */
-console.log("\n--- editing the preview ---");
+/* ========================= 9. editing the rendered document ========================= */
+console.log("\n--- editing the rendered document ---");
 
 /** Source pane text, reassembled from the displayed lines. */
 const sourceText = () =>
   page.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent).join("\n"));
 
+const editing = () =>
+  page.$eval(".panes", (e) => e.classList.contains("editing"));
+
 /**
- * Empty the rich editor and type into it.
+ * Put a document in the source, then open the rendered editor on it.
  *
- * Clearing goes through the source pane rather than a select-all inside the
- * rich editor: the source is authoritative, so emptying it propagates down
- * deterministically. Selecting inside the rich editor right after clicking into
- * it races with the pending source-to-preview sync, and the test would flake.
+ * The source pane exists only in the split view, so anything that writes to it
+ * has to happen before switching. That constraint is the whole point of the
+ * design: the two surfaces are never on screen together.
  */
-async function retypeRich(content) {
-  await clearSource();
+async function editRendered(markdown) {
+  if (await editing()) await (await btn("Back to split")).click();
+  await wait(300);
+  await pasteSource(markdown);
+  await (await btn("Edit preview")).click();
   await wait(400);
-  await page.click("#rich .ProseMirror");
-  if (content) await page.keyboard.type(content);
-  await wait(500);
 }
 
-// --- layout and editing mode are independent ---
-// The toggle must never alter the chosen layout: when the preview is hidden it
-// is disabled, not hijacked.
-await (await btn("Source")).click();
-await wait(300);
-ok("in Source layout the edit toggle is disabled",
-  (await (await btn("Edit preview")).evaluate((b) => b.disabled)) === true);
-ok("the ribbon stays hidden in Source layout",
-  (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
+/** Return to the split view and read the regenerated source. */
+async function splitAndRead() {
+  await (await btn("Back to split")).click();
+  await wait(400);
+  return sourceText();
+}
 
-await (await btn("Split")).click();
-await wait(300);
-ok("the toggle becomes usable as soon as the preview is shown",
-  (await (await btn("Edit preview")).evaluate((b) => b.disabled)) === false);
+/** Select everything in the rendered editor. */
+async function selectAllRendered() {
+  await page.click("#rich .ProseMirror");
+  await wait(250);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("KeyA");
+  await page.keyboard.up("Control");
+  await wait(150);
+}
 
 await retype("# Start\n\nInitial text.");
-const viewBefore = await page.$eval(".panes", (e) => e.dataset.view);
+ok("the ribbon is hidden in the split view",
+  (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
+
 await (await btn("Edit preview")).click();
 await wait(400);
 
-ok("turning editing on does not change the layout",
-  (await page.$eval(".panes", (e) => e.dataset.view)) === viewBefore, viewBefore);
-
-// The active state must read at a glance, so it wears the same colour as the
-// selected layout option.
-ok("the active toggle is visually distinct", await page.evaluate(() => {
-  const toggle = [...document.querySelectorAll(".tb button")]
-    .find((b) => b.textContent === "Edit preview");
-  const selected = document.querySelector('.seg button[aria-pressed="true"]');
-  const c = getComputedStyle(toggle);
-  return c.backgroundColor === getComputedStyle(selected).backgroundColor &&
-    c.backgroundColor !== getComputedStyle(document.body).backgroundColor;
-}));
-
+// Editing takes the full width: that is what keeps the two surfaces apart, and
+// with them the whole class of synchronisation races.
+ok("editing hides the source pane",
+  (await page.$eval(".pane-editor", (e) => getComputedStyle(e).display)) === "none");
+ok("editing hides the splitter",
+  (await page.$eval(".divider", (e) => getComputedStyle(e).display)) === "none");
+ok("the button label becomes Back to split",
+  (await page.$$eval(".tb button", (bs) => bs.map((b) => b.textContent))).includes("Back to split"));
 ok("the formatting ribbon appears",
   (await page.$eval(".rb", (e) => getComputedStyle(e).display)) !== "none");
-ok("the rich editor is mounted", (await page.$("#rich .ProseMirror")) !== null);
+ok("the rendered editor is mounted", (await page.$("#rich .ProseMirror")) !== null);
 ok("the read-only preview is hidden",
   (await page.$eval("#preview", (e) => getComputedStyle(e).display)) === "none");
-ok("the preview picks up the current document",
+ok("the rendered editor picks up the current document",
   (await page.$eval("#rich h1", (e) => e.textContent).catch(() => null)) === "Start");
 
-// --- typing in the preview reaches the source ---
-await retypeRich("Written in the preview");
-ok("typing in the preview updates the source",
-  (await sourceText()).includes("Written in the preview"), await sourceText());
+// --- typing in the rendered document reaches the source ---
+await selectAllRendered();
+await page.keyboard.press("Backspace");
+await page.keyboard.type("Written in the preview");
+await wait(500);
+ok("typing in the rendered document updates the source",
+  (await splitAndRead()).includes("Written in the preview"), await sourceText());
 
 // --- the ribbon really produces Markdown ---
-await page.keyboard.down("Control");
-await page.keyboard.press("KeyA");
-await page.keyboard.up("Control");
+await editRendered("plain text");
+await selectAllRendered();
 await (await btn("B")).click();
 await wait(400);
 ok("the Bold button produces **bold** in the source",
-  /\*\*Written in the preview\*\*/.test(await sourceText()), await sourceText());
+  /\*\*plain text\*\*/.test(await splitAndRead()), await sourceText());
 
-await page.keyboard.down("Control");
-await page.keyboard.press("KeyA");
-await page.keyboard.up("Control");
-await (await btn("B")).click();
-await wait(300);
-
+await editRendered("heading text");
+await page.click("#rich .ProseMirror");
+await wait(250);
 await page.select(".rb-select", "h2");
 await wait(400);
 ok("the style selector produces a level 2 heading",
-  /^##\s/.test((await sourceText()).trim()), await sourceText());
-
-await page.select(".rb-select", "p");
-await wait(300);
+  /^##\s/.test((await splitAndRead()).trim()), await sourceText());
 
 // --- lists and tasks ---
-await retypeRich("alpha");
+await editRendered("alpha");
+await selectAllRendered();
 await (await btn("Tasks")).click();
 await wait(400);
 ok("the Tasks button produces a checkbox",
-  /^-\s\[ \]\salpha/.test((await sourceText()).trim()), await sourceText());
+  /^-\s\[ \]\salpha/.test((await splitAndRead()).trim()), await sourceText());
 
+await (await btn("Edit preview")).click();
+await wait(400);
 await page.click("#rich .task-check");
 await wait(400);
-ok("clicking the box ticks the task in the source",
-  /^-\s\[x\]\salpha/.test((await sourceText()).trim()), await sourceText());
-
-ok("the ticked box is reflected in the preview",
+ok("clicking the box ticks the task",
   (await page.$eval("#rich li.task-item", (e) => e.getAttribute("data-checked"))) === "true");
+ok("the ticked state reaches the source",
+  /^-\s\[x\]\salpha/.test((await splitAndRead()).trim()), await sourceText());
 
 // --- tables ---
-await retypeRich("");
+await editRendered("");
+await page.click("#rich .ProseMirror");
 await (await btn("Table")).click();
 await wait(500);
-const tableSource = await sourceText();
-ok("the Table button produces a GFM table",
-  /\|\s*\|/.test(tableSource) && /\|\s*---\s*\|/.test(tableSource), tableSource.slice(0, 80));
+ok("the table is rendered in the editor",
+  (await page.$$eval("#rich table th", (e) => e.length)) === 3);
 ok("table tools appear when the cursor is inside one",
   (await page.$eval(".rb-group", (e) => getComputedStyle(e).display)) !== "none");
-ok("the table is rendered in the rich editor",
-  (await page.$$eval("#rich table th", (e) => e.length)) === 3);
-
 await (await btn("+Col")).click();
 await wait(400);
-ok("adding a column shows up in the preview",
+ok("adding a column shows up in the editor",
   (await page.$$eval("#rich table th", (e) => e.length)) === 4);
+const tableSource = await splitAndRead();
+ok("the table reaches the source as a GFM table",
+  /\|\s*\|/.test(tableSource) && /\|\s*---\s*\|/.test(tableSource), tableSource.slice(0, 80));
 
-// --- the source stays authoritative: what is typed left flows right ---
+// --- the source stays authoritative ---
 await retype("## From the source\n\nWith some *style*.");
-await wait(500);
-ok("typing in the source updates the preview",
+await wait(400);
+ok("the split preview follows the source",
+  (await page.$eval("#preview h2", (e) => e.textContent).catch(() => null)) === "From the source");
+await (await btn("Edit preview")).click();
+await wait(400);
+ok("the rendered editor opens on the current source",
   (await page.$eval("#rich h2", (e) => e.textContent).catch(() => null)) === "From the source");
-ok("emphasis typed in the source is rendered",
+ok("emphasis typed in the source is carried over",
   (await page.$$eval("#rich em", (e) => e.length)) === 1);
+await (await btn("Back to split")).click();
+await wait(400);
 
 // --- raw HTML survives the round trip ---
 const HTML_FIXTURE = "Before\n\n<details><summary>More</summary>\nhidden\n</details>\n\nAfter";
 await pasteSource(HTML_FIXTURE);
 ok("the source receives the HTML fragment unaltered",
   (await sourceText()) === HTML_FIXTURE, await sourceText());
-await wait(400);
 
-ok("raw HTML is marked as non-editable in the preview",
+await (await btn("Edit preview")).click();
+await wait(400);
+ok("raw HTML is marked as non-editable in the rendered editor",
   (await page.$("#rich .raw-html")) !== null);
 
 // Edit the neighbouring paragraph, not the HTML block. Clicking the latter
@@ -430,25 +434,22 @@ ok("raw HTML is marked as non-editable in the preview",
 await page.click("#rich p");
 await page.keyboard.press("End");
 await page.keyboard.type(" !");
-await wait(500);
-const afterEdit = await sourceText();
+await wait(400);
+const afterEdit = await splitAndRead();
 ok("raw HTML survives an edit elsewhere in the document",
   afterEdit.includes("<details><summary>More</summary>"), afterEdit);
 ok("the neighbouring edit did happen", afterEdit.includes("Before !"), afterEdit);
 
-// --- leaving rich mode loses nothing ---
-await retypeRich("Final preview content");
-const viewBeforeExit = await page.$eval(".panes", (e) => e.dataset.view);
-await (await btn("Edit preview")).click();
-await wait(400);
-ok("leaving rich mode pushes the last changes down",
-  (await sourceText()).includes("Final preview content"), await sourceText());
-ok("turning editing off does not change the layout either",
-  (await page.$eval(".panes", (e) => e.dataset.view)) === viewBeforeExit, viewBeforeExit);
+// --- returning to split restores everything ---
+ok("the source pane comes back",
+  (await page.$eval(".pane-editor", (e) => getComputedStyle(e).display)) !== "none");
 ok("the read-only preview comes back",
   (await page.$eval("#preview", (e) => getComputedStyle(e).display)) !== "none");
 ok("the ribbon disappears",
   (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
+ok("the button label returns to Edit preview",
+  (await page.$$eval(".tb button", (bs) => bs.map((b) => b.textContent))).includes("Edit preview"));
+
 
 /* ========================= 10. exporting the rendered document ========================= */
 console.log("\n--- exporting the rendered document ---");

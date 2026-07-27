@@ -180,24 +180,21 @@ input:focus-visible {
 
 /* ------------------------------ panes ------------------------------ */
 
+/* Source and live preview are always side by side. There is no layout choice:
+   the only other state is editing the rendered document, which takes the full
+   width and steps the source pane aside. */
 .panes {
   display: grid;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-}
-
-.panes[data-view="split"] {
   grid-template-columns: var(--split, 1fr) 6px 1fr;
 }
 
-.panes[data-view="editor"] { grid-template-columns: 1fr; }
-.panes[data-view="preview"] { grid-template-columns: 1fr; }
+.panes.editing { grid-template-columns: 1fr; }
 
-.panes[data-view="editor"] .pane-preview,
-.panes[data-view="editor"] .divider,
-.panes[data-view="preview"] .pane-editor,
-.panes[data-view="preview"] .divider { display: none; }
+.panes.editing .pane-editor,
+.panes.editing .divider { display: none; }
 
 .pane {
   min-width: 0;
@@ -596,9 +593,10 @@ li.ProseMirror-selectednode::after {
 /* Below this width the panes stack: the handle then acts on rows rather than
    columns. */
 @media (max-width: 720px) {
-  .panes[data-view="split"] {
+  .panes {
     grid-template-columns: 1fr;
     grid-template-rows: var(--split, 1fr) 6px 1fr;
   }
-  .panes[data-view="split"] .divider { cursor: row-resize; }
+  .panes .divider { cursor: row-resize; }
+  .panes.editing { grid-template-rows: 1fr; }
 }

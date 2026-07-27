@@ -5,9 +5,11 @@ hands over one HTML file and never hears about the document again: no network
 request is made after the page loads, and the document's security policy asks
 the browser to block any attempt to make one.
 
-The document can be edited two ways, interchangeably and at the same time: **as
-source**, with syntax highlighting, and **as rendered output**, directly in the
-formatted document, with a formatting ribbon. The two views stay in sync.
+You write Markdown on the left and watch it render on the right. Press **Edit
+preview** and the rendered document takes over the full width, directly
+editable, with a formatting ribbon; **Back to split** returns you to writing
+source. The two surfaces are never on screen at once, which is what keeps their
+synchronisation down to a pair of transitions instead of a live negotiation.
 
 The application is a single file of ~960 kB (~330 kB compressed), with no
 runtime dependency on anything external.
@@ -89,9 +91,11 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
   working: typing `## ` makes a heading, `- ` a list, ` ``` ` a code block.
 - **Live preview**: GFM rendering (tables, task lists, strikethrough) sanitised
   by DOMPurify, synchronised scrolling, draggable splitter.
-- **Three layouts**: source only, split, preview only. Layout and editing mode
-  are independent: in the Source layout the **Edit preview** button is simply
-  disabled — it never changes the layout you picked.
+- **One layout, two states**: source and live preview are always side by side;
+  **Edit preview** replaces that with the rendered document alone, full width,
+  and the button becomes **Back to split**. There is no layout control to
+  contradict the mode, and no cramped ribbon over a half-width column. The
+  splitter reaches 15–85 %, so either pane can take almost the whole width.
 - **Local files**: `Open` / `Save` write real `.md` files through the File
   System Access API. Elsewhere, an automatic fallback to file import and
   download (see the caveat below).
