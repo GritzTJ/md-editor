@@ -177,11 +177,17 @@ jobs:
               || { echo "missing header: $expected"; exit 1; }
           done
 
-          curl -sf http://localhost:8080/ | grep -q 'id="app-js"' \
+          # Fetched to a file rather than piped: `grep -q` stops at the first
+          # match and closes the pipe, curl takes a SIGPIPE, and `pipefail`
+          # turns that into a failed pipeline on a page that was served
+          # perfectly. It also means the digest below covers exactly the bytes
+          # that were just checked.
+          curl -sf http://localhost:8080/ -o served.html
+
+          grep -q 'id="app-js"' served.html \
             || { echo "the page does not contain the application"; exit 1; }
 
-          # The served digest must match the built file.
-          served=$(curl -sf http://localhost:8080/ | sha256sum | cut -d' ' -f1)
+          served=$(sha256sum served.html | cut -d' ' -f1)
           declared=$(curl -sf http://localhost:8080/index.html.sha256 | cut -d' ' -f1)
           [ "$served" = "$declared" ] \
             || { echo "digest mismatch: served $served, announced $declared"; exit 1; }
