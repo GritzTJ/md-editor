@@ -11,7 +11,7 @@ editable, with a formatting ribbon; **Back to split** returns you to writing
 source. The two surfaces are never on screen at once, which is what keeps their
 synchronisation down to a pair of transitions instead of a live negotiation.
 
-The application is a single file of ~960 kB (~330 kB compressed), with no
+The application is a single file of ~1.0 MB (~350 kB compressed), with no
 runtime dependency on anything external.
 
 ---
@@ -185,36 +185,35 @@ and that the source stops changing on the next pass.
 
 Measured against the [Markdown Guide](https://www.markdownguide.org/), construct
 by construct, by `test/syntax.mjs`. Each one is checked twice: that the preview
-renders it as documented, and that it survives being edited in the rendered view.
+renders it as documented, and that it survives being edited in the rendered
+view — a construct can render perfectly and still be destroyed on the way back.
 
-**Basic syntax — all 43 constructs, rendered and round-tripped.** Headings (hash
-and setext), paragraphs, all three line-break forms, bold and italic in both
-asterisk and underscore forms, blockquotes including nested ones, ordered and
-unordered lists in every delimiter, nesting, inline code, indented code blocks,
-all three horizontal-rule forms, inline / angle-bracket / reference-style links,
-images, escapes, and raw HTML.
+**All 58 documented constructs are supported, and all 58 survive the round
+trip.**
 
-**Extended syntax — 7 of 15.** Supported: tables, table alignment, fenced code
-blocks, syntax-highlighting language tags, strikethrough, task lists, and
-disabling automatic linking with a code span.
+Basic syntax: headings (hash and setext), paragraphs, all three line-break
+forms, bold and italic in both asterisk and underscore forms, blockquotes
+including nested ones, ordered and unordered lists in every delimiter, nesting,
+inline code, indented code blocks, all three horizontal-rule forms, inline /
+angle-bracket / reference-style links, images, escapes, raw HTML.
 
-Not implemented, each rendered as literal text:
+Extended syntax: tables with alignment, fenced code blocks with language tags,
+footnotes, heading IDs, definition lists, strikethrough, task lists, emoji
+shortcodes, highlight, subscript, superscript, and automatic URL linking.
 
-| Construct | Example |
-| --- | --- |
-| Footnotes | `Text.[^1]` |
-| Heading IDs | `### Heading {#custom-id}` |
-| Definition lists | `Term` / `: Definition` |
-| Emoji shortcodes | `:tent:` |
-| Highlight | `==important==` |
-| Subscript | `H~2~O` |
-| Superscript | `X^2^` |
-| Automatic URL linking | a bare `https://example.com` |
+Everything is bundled: the six markdown-it plugins and the emoji table are
+compiled into the same single file, and `verify.mjs` still confirms the bundle
+holds no network primitive. Support for extended syntax costs about 20 kB
+compressed and buys nothing at the price of a request.
 
-The first seven are optional markdown-it plugins and could be added; each would
-also need a node or mark in the ProseMirror schema, or editing the preview would
-destroy it. Automatic URL linking is a deliberate choice rather than a gap:
-`linkify` is off, so nothing in your text is silently turned into a link.
+Three normalisations are worth knowing, all of them a consequence of
+regenerating the source from the document model:
+
+- an emoji shortcode comes back as the character itself — `:tent:` becomes ⛺;
+- a bare autolinked URL comes back in angle brackets — `https://example.com`
+  becomes `<https://example.com>`;
+- everything else keeps its meaning but is written in the canonical form
+  described under *Editing the preview*.
 
 ---
 
@@ -258,7 +257,7 @@ npm install --no-save puppeteer
 node test/browser.mjs      # 77 end-to-end tests
 node test/roundtrip.mjs    # 33 Markdown constructs, round-tripped
 node test/buttons.mjs      # 41 controls, one assertion each
-node test/syntax.mjs       # 58 Markdown Guide constructs
+node test/syntax.mjs       # 58 Markdown Guide constructs, render + round trip
 ```
 
 `browser.mjs` drives a real Chrome against the served application. It checks

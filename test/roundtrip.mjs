@@ -74,6 +74,24 @@ const CASES = [
   ["fully bold link", "[**all bold**](https://example.com)\n"],
   ["code inside a link", "[`code` text](https://example.com)\n"],
   ["struck link", "[~~gone~~ text](https://example.com)\n"],
+
+  // Extended syntax added for Markdown Guide coverage. Each needs a node or a
+  // mark in the schema, or editing the rendered document would destroy it.
+  ["highlight", "Some ==highlighted== words.\n"],
+  ["subscript", "H~2~O and CO~2~\n"],
+  ["superscript", "X^2^ plus Y^n^\n"],
+  ["heading with an id", "### Heading {#custom-id}\n"],
+  ["definition list", "Term\n: The definition.\n"],
+  ["definition list, several terms", "First\n: One.\n\nSecond\n: Two.\n"],
+  ["definition list, two terms one definition", "First\nSecond\n: Shared.\n"],
+  ["definition list, two definitions", "Term\n: One.\n: Two.\n"],
+  ["footnote", "Text.[^1]\n\n[^1]: The note.\n"],
+  ["footnotes, named labels", "A[^alpha] and B[^beta]\n\n[^alpha]: First.\n\n[^beta]: Second.\n"],
+  ["footnote with emphasis", "Text.[^1]\n\n[^1]: A **bold** note.\n"],
+  ["emoji", "Camping \u26fa and laughing \ud83d\ude02\n"],
+  ["autolinked URL", "See <https://example.com> now.\n"],
+  ["highlight inside a list", "- some ==marked== text\n"],
+  ["mixed extended", "# T {#top}\n\n==mark== H~2~O X^2^\n\nTerm\n: Def\n\nNote.[^n]\n\n[^n]: Here.\n"],
 ];
 
 /* --- Bundle the engine, run it in the browser ---------------------------- */

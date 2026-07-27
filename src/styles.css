@@ -372,6 +372,59 @@ input:focus-visible {
 .task-body { flex: 1 1 auto; min-width: 0; }
 .md li.task-item > .task-body > :last-child { margin-bottom: 0; }
 
+/* --- extended syntax ------------------------------------------------------
+   Highlight, subscript and superscript, definition lists, footnotes. The
+   preview and the rendered editor produce different markup for footnotes --
+   markdown-it emits a section of back-linked items at the end, the editor an
+   inline reference plus a labelled block -- so both are styled here. */
+
+.md mark {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: .05em .2em;
+}
+
+.md sub, .md sup { font-size: .75em; line-height: 0; }
+
+.md dl { margin: 0 0 1em; }
+.md dt { font-weight: 600; margin-top: .6em; }
+.md dd { margin: .2em 0 .2em 1.6em; color: var(--fg-muted); }
+.md dd > :last-child { margin-bottom: 0; }
+
+/* Footnotes as the preview renders them. */
+.md .footnotes-sep { margin-top: 2.4em; }
+.md .footnotes { font-size: .9em; color: var(--fg-muted); }
+.md .footnotes-list { padding-left: 1.6em; }
+.md .footnote-backref { text-decoration: none; margin-left: .3em; }
+
+/* Footnotes as the rendered editor models them: a reference, and a definition
+   block whose label is outside the editable flow. */
+.md .footnote-ref {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.md .footnote-def {
+  display: flex;
+  gap: .6em;
+  margin: .4em 0;
+  padding: .4em .6em;
+  border-left: 3px solid var(--border);
+  background: var(--bg-alt);
+  font-size: .92em;
+}
+
+.md .footnote-def-label {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.md .footnote-def-body { flex: 1 1 auto; min-width: 0; }
+.md .footnote-def-body > :last-child { margin-bottom: 0; }
+
 /* --- raw HTML -------------------------------------------------------------
    Not editable in the preview, but kept verbatim on save: shown as a distinct
    block rather than hidden. */

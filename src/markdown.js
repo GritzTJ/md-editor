@@ -17,6 +17,12 @@
  * ------------------------------------------------------------------------- */
 
 import MarkdownIt from "markdown-it";
+import markPlugin from "markdown-it-mark";
+import subPlugin from "markdown-it-sub";
+import supPlugin from "markdown-it-sup";
+import deflistPlugin from "markdown-it-deflist";
+import footnotePlugin from "markdown-it-footnote";
+import { full as emojiPlugin } from "markdown-it-emoji";
 import { Schema } from "prosemirror-model";
 import {
   schema as baseSchema,
@@ -82,15 +88,88 @@ function taskListPlugin(md) {
   };
 }
 
+/**
+ * Heading identifiers: `### Heading {#custom-id}`.
+ *
+ * Written by hand rather than pulled from a general attributes plugin, which
+ * would accept arbitrary `{key=value}` pairs on any element. DOMPurify would
+ * strip the dangerous ones, but a narrow rule that only ever sets `id`, and
+ * only on a heading, leaves nothing to strip in the first place.
+ */
+function headingIdsPlugin(md) {
+  const ID = /\s*\{#([A-Za-z0-9_-]+)\}\s*$/;
+
+  md.core.ruler.after("inline", "heading_ids", (state) => {
+    const tokens = state.tokens;
+
+    for (let i = 0; i < tokens.length - 1; i++) {
+      if (tokens[i].type !== "heading_open") continue;
+
+      const inline = tokens[i + 1];
+      if (!inline || inline.type !== "inline") continue;
+
+      const match = ID.exec(inline.content);
+      if (!match) continue;
+
+      tokens[i].attrSet("id", match[1]);
+      inline.content = inline.content.replace(ID, "");
+
+      // The heading text is already split into child tokens, so the marker has
+      // to be removed from the last one as well or it would still render.
+      const kids = inline.children || [];
+      for (let j = kids.length - 1; j >= 0; j--) {
+        if (kids[j].type === "text") {
+          kids[j].content = kids[j].content.replace(ID, "");
+          break;
+        }
+      }
+    }
+    return true;
+  });
+}
+
+/**
+ * Turn emoji tokens into plain text.
+ *
+ * The plugin already resolved `:tent:` to the character; keeping a distinct
+ * token type would mean carrying a node through the whole ProseMirror schema
+ * for something that is, in the end, just text. The cost is that the shortcode
+ * is not restored when the source is regenerated -- the character stays.
+ */
+function emojiAsTextPlugin(md) {
+  md.core.ruler.push("emoji_as_text", (state) => {
+    for (const token of state.tokens) {
+      if (token.type !== "inline" || !token.children) continue;
+      for (const child of token.children) {
+        if (child.type === "emoji") child.type = "text";
+      }
+    }
+    return true;
+  });
+}
+
 // `html: true` preserves the original behaviour: raw HTML written in the
 // Markdown is interpreted, then sanitised by DOMPurify. Turning it off would
 // simplify life but break existing documents.
+//
+// `linkify` turns a bare URL into a link, as the guide documents. It reads the
+// text already in the document and adds no request of its own: an anchor is
+// only followed if the user clicks it, and then with no referrer.
 export const md = MarkdownIt("default", {
   html: true,
-  linkify: false,
+  linkify: true,
   typographer: false,
   breaks: false,
-}).use(taskListPlugin);
+})
+  .use(taskListPlugin)
+  .use(headingIdsPlugin)
+  .use(markPlugin)
+  .use(subPlugin)
+  .use(supPlugin)
+  .use(deflistPlugin)
+  .use(footnotePlugin)
+  .use(emojiPlugin)
+  .use(emojiAsTextPlugin);
 
 /* ===========================================================================
  * 2. HTML rendering for the read-only preview
@@ -99,10 +178,15 @@ export const md = MarkdownIt("default", {
 // Links open in a new tab with no referrer: the target site must learn nothing
 // about the document being edited.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A" && node.hasAttribute("href")) {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-  }
+  if (node.tagName !== "A" || !node.hasAttribute("href")) return;
+
+  // Except in-document anchors -- footnote references and their back-links.
+  // Sending those to a new tab would be nonsense, and there is no third party
+  // to keep in the dark.
+  if (node.getAttribute("href").startsWith("#")) return;
+
+  node.setAttribute("target", "_blank");
+  node.setAttribute("rel", "noopener noreferrer");
 });
 
 const PURIFY_CONFIG = {
@@ -197,6 +281,67 @@ const htmlInline = {
   parseDOM: [{ tag: "span.raw-html-inline", getAttrs: (dom) => ({ content: dom.textContent }) }],
 };
 
+/* --- definition lists ---------------------------------------------------- */
+
+const definitionList = {
+  group: "block",
+  content: "(definition_term | definition_description)+",
+  parseDOM: [{ tag: "dl" }],
+  toDOM: () => ["dl", 0],
+};
+
+const definitionTerm = {
+  content: "inline*",
+  defining: true,
+  parseDOM: [{ tag: "dt" }],
+  toDOM: () => ["dt", 0],
+};
+
+const definitionDescription = {
+  content: "block+",
+  defining: true,
+  parseDOM: [{ tag: "dd" }],
+  toDOM: () => ["dd", 0],
+};
+
+/* --- footnotes ------------------------------------------------------------
+ * A reference is an inline atom, and each definition is a block that lands at
+ * the end of the document -- which is where Markdown puts them anyway, so the
+ * two serialise back into place without any bookkeeping.
+ * ---------------------------------------------------------------------- */
+
+const footnoteRef = {
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  attrs: { label: { default: "1" } },
+  toDOM: (node) => ["sup", {
+    class: "footnote-ref",
+    title: `Footnote ${node.attrs.label}`,
+  }, `[${node.attrs.label}]`],
+  parseDOM: [{
+    tag: "sup.footnote-ref",
+    getAttrs: (dom) => ({ label: (dom.textContent || "").replace(/[[\]]/g, "") || "1" }),
+  }],
+};
+
+const footnoteDefinition = {
+  group: "block",
+  content: "block+",
+  defining: true,
+  attrs: { label: { default: "1" } },
+  toDOM: (node) => ["div", { class: "footnote-def", "data-label": node.attrs.label },
+    ["span", { class: "footnote-def-label", contenteditable: "false" }, `[^${node.attrs.label}]:`],
+    ["div", { class: "footnote-def-body" }, 0],
+  ],
+  parseDOM: [{
+    tag: "div.footnote-def",
+    getAttrs: (dom) => ({ label: dom.getAttribute("data-label") || "1" }),
+    contentElement: ".footnote-def-body",
+  }],
+};
+
 // Mark order decides nesting when marks overlap: the earliest in the schema is
 // the outermost. The base order puts `strong` before `link`, which turns
 // `[**bold** text](url)` into two separate links -- the bold part wrapping its
@@ -207,12 +352,46 @@ const marks = baseSchema.spec.marks
     parseDOM: [{ tag: "s" }, { tag: "del" }, { tag: "strike" }],
     toDOM: () => ["s", 0],
   })
+  .addToEnd("highlight", {
+    parseDOM: [{ tag: "mark" }],
+    toDOM: () => ["mark", 0],
+  })
+  .addToEnd("subscript", {
+    parseDOM: [{ tag: "sub" }],
+    toDOM: () => ["sub", 0],
+    excludes: "superscript",
+  })
+  .addToEnd("superscript", {
+    parseDOM: [{ tag: "sup" }],
+    toDOM: () => ["sup", 0],
+    excludes: "subscript",
+  })
   .addToStart("link", baseSchema.spec.marks.get("link"));
+
+// `id` on headings, for `### Heading {#custom-id}`.
+const heading = {
+  ...baseSchema.spec.nodes.get("heading"),
+  attrs: { level: { default: 1 }, id: { default: null } },
+  toDOM(node) {
+    const attrs = node.attrs.id ? { id: node.attrs.id } : {};
+    return [`h${node.attrs.level}`, attrs, 0];
+  },
+  parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+    tag: `h${level}`,
+    getAttrs: (dom) => ({ level, id: dom.getAttribute("id") || null }),
+  })),
+};
 
 export const schema = new Schema({
   nodes: baseSchema.spec.nodes
+    .update("heading", heading)
     .update("list_item", listItem)
     .append(tables)
+    .addToEnd("definition_list", definitionList)
+    .addToEnd("definition_term", definitionTerm)
+    .addToEnd("definition_description", definitionDescription)
+    .addToEnd("footnote_ref", footnoteRef)
+    .addToEnd("footnote_definition", footnoteDefinition)
     .addToEnd("html_block", htmlBlock)
     .addToEnd("html_inline", htmlInline),
   marks,
@@ -253,7 +432,10 @@ export const parser = new MarkdownParser(schema, md, {
       tight: listIsTight(tokens, i),
     }),
   },
-  heading: { block: "heading", getAttrs: (tok) => ({ level: +tok.tag.slice(1) }) },
+  heading: {
+    block: "heading",
+    getAttrs: (tok) => ({ level: +tok.tag.slice(1), id: tok.attrGet("id") }),
+  },
   code_block: { block: "code_block", noCloseToken: true },
   fence: { block: "code_block", getAttrs: (tok) => ({ params: tok.info || "" }), noCloseToken: true },
   hr: { node: "horizontal_rule" },
@@ -270,6 +452,9 @@ export const parser = new MarkdownParser(schema, md, {
   em: { mark: "em" },
   strong: { mark: "strong" },
   s: { mark: "strikethrough" },
+  mark: { mark: "highlight" },
+  sub: { mark: "subscript" },
+  sup: { mark: "superscript" },
   link: {
     mark: "link",
     getAttrs: (tok) => ({ href: tok.attrGet("href"), title: tok.attrGet("title") || null }),
@@ -284,6 +469,18 @@ export const parser = new MarkdownParser(schema, md, {
   tr: { block: "table_row" },
   th: { block: "table_header", getAttrs: (tok) => ({ align: alignOf(tok) }) },
   td: { block: "table_cell", getAttrs: (tok) => ({ align: alignOf(tok) }) },
+
+  dl: { block: "definition_list" },
+  dt: { block: "definition_term" },
+  dd: { block: "definition_description" },
+
+  // The block wrapper carries nothing: dropping it leaves each definition as a
+  // top-level block at the end of the document, which is where the serialiser
+  // needs them anyway. The anchor is the generated back-link, not content.
+  footnote_block: { ignore: true },
+  footnote_anchor: { ignore: true, noCloseToken: true },
+  footnote_ref: { node: "footnote_ref", getAttrs: (tok) => ({ label: tok.meta.label }) },
+  footnote: { block: "footnote_definition", getAttrs: (tok) => ({ label: tok.meta.label }) },
 
   html_block: { node: "html_block", getAttrs: (tok) => ({ content: tok.content }) },
   html_inline: { node: "html_inline", getAttrs: (tok) => ({ content: tok.content }) },
@@ -365,9 +562,58 @@ function itemPrefix(node, i, bullet) {
   return bullet + (checked ? "[x] " : "[ ] ");
 }
 
+/**
+ * `Term` on its own line, then `: description`.
+ *
+ * Written by hand like the table serialiser: the term is a bare line with no
+ * marker, which the generic block machinery has no way to express.
+ */
+function serializeDefinitionList(state, node) {
+  state.flushClose();
+
+  node.forEach((child, _offset, index) => {
+    if (child.type === schema.nodes.definition_term) {
+      // A term following a description opens a new group, which Markdown
+      // separates with a blank line -- without it the term is read back as more
+      // of the previous definition. Consecutive terms sharing one definition
+      // need no separation, and get none: `flushClose` only writes when a block
+      // was actually closed, which a term never does.
+      if (index) state.flushClose(2);
+      state.write("");
+      state.renderInline(child);
+      state.ensureNewLine();
+    } else {
+      state.wrapBlock("  ", ": ", child, () => state.renderContent(child));
+    }
+  });
+
+  state.closeBlock(node);
+}
+
 export const serializer = new MarkdownSerializer(
   {
     ...defaultMarkdownSerializer.nodes,
+
+    heading(state, node) {
+      state.write(state.repeat("#", node.attrs.level) + " ");
+      state.renderInline(node, false);
+      if (node.attrs.id) state.text(` {#${node.attrs.id}}`, false);
+      state.closeBlock(node);
+    },
+
+    definition_list: serializeDefinitionList,
+    // Terms and descriptions are handled entirely by serializeDefinitionList.
+    definition_term: () => {},
+    definition_description: () => {},
+
+    footnote_ref(state, node) {
+      state.text(`[^${node.attrs.label}]`, false);
+    },
+
+    footnote_definition(state, node) {
+      state.wrapBlock("    ", `[^${node.attrs.label}]: `, node,
+        () => state.renderContent(node));
+    },
 
     bullet_list(state, node) {
       state.renderList(node, "  ", (i) =>
@@ -409,6 +655,17 @@ export const serializer = new MarkdownSerializer(
       mixable: true,
       expelEnclosingWhitespace: true,
     },
+    highlight: {
+      open: "==",
+      close: "==",
+      mixable: true,
+      expelEnclosingWhitespace: true,
+    },
+    // No `expelEnclosingWhitespace` on these two: `H~2~O` has no space to
+    // expel, and the delimiters are single characters that must stay tight
+    // against the text or the parser will not see them.
+    subscript: { open: "~", close: "~", mixable: true },
+    superscript: { open: "^", close: "^", mixable: true },
   },
 );
 

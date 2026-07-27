@@ -264,6 +264,9 @@ const ribbon = el("div", { class: "rb", role: "toolbar", "aria-label": "Formatti
   rbButton("em", "I", "Italic (Ctrl+I)", () => rich.commands.em(), "rb-btn rb-italic"),
   rbButton("strikethrough", "S", "Strikethrough (Ctrl+Shift+X)", () => rich.commands.strikethrough(), "rb-btn rb-strike"),
   rbButton("code", "</>", "Code (Ctrl+E)", () => rich.commands.code(), "rb-btn rb-mono"),
+  rbButton("highlight", "Mark", "Highlight (Ctrl+Shift+H)", () => rich.commands.highlight()),
+  rbButton("subscript", "Sub", "Subscript (Ctrl+,)", () => rich.commands.subscript()),
+  rbButton("superscript", "Sup", "Superscript (Ctrl+.)", () => rich.commands.superscript()),
   el("div", { class: "tb-sep" }),
   rbButton("bullet_list", "Bullets", "Bulleted list", () => rich.commands.bulletList()),
   rbButton("ordered_list", "Numbers", "Numbered list", () => rich.commands.orderedList()),
@@ -483,7 +486,8 @@ function updateRibbon(status = rich.status()) {
   if (!state.editing) return;
 
   blockSelect.value = status.block;
-  for (const key of ["strong", "em", "strikethrough", "code", "link",
+  for (const key of ["strong", "em", "strikethrough", "highlight", "subscript",
+                     "superscript", "code", "link",
                      "bullet_list", "ordered_list", "task", "blockquote"]) {
     if (rb[key]) rb[key].setAttribute("aria-pressed", String(Boolean(status[key])));
   }
