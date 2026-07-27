@@ -64,6 +64,7 @@ jobs:
           done
           node test/browser.mjs
           node test/roundtrip.mjs
+          node test/buttons.mjs
 
       - uses: actions/upload-artifact@v4
         with:

@@ -278,7 +278,7 @@ const ribbon = el("div", { class: "rb", role: "toolbar", "aria-label": "Formatti
   rbButton("bullet_list", "Bullets", "Bulleted list", () => rich.commands.bulletList()),
   rbButton("ordered_list", "Numbers", "Numbered list", () => rich.commands.orderedList()),
   rbButton("task", "Tasks", "Task list", () => rich.commands.taskList()),
-  rbButton("outdent", "Outdent", "Decrease indentation", () => rich.commands.lift()),
+  rbButton("outdent", "Outdent", "Decrease indentation", () => rich.commands.outdent()),
   el("div", { class: "tb-sep" }),
   rbButton("blockquote", "Quote", "Block quote", () => rich.commands.blockquote()),
   rbButton("hr", "Divider", "Horizontal rule", () => rich.commands.horizontalRule()),

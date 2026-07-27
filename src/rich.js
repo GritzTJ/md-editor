@@ -84,36 +84,59 @@ function taskActive(state) {
  * Commands
  * ======================================================================== */
 
+/** Every list item touched by the selection, collapsed cursor included. */
+function listItemsInSelection(state) {
+  const { from, to } = state.selection;
+  const items = [];
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type === nodes.list_item) items.push({ node, pos });
+  });
+  return items;
+}
+
 /**
- * Toggle between a plain bullet and a checkbox.
+ * Toggle between plain bullets and checkboxes.
  *
  * A task is not a distinct list type in Markdown: it is a bullet whose content
- * starts with `[ ]`. So the toggle acts on the item's attribute, creating the
+ * starts with `[ ]`. So the toggle acts on the items' attribute, creating the
  * list first when needed.
+ *
+ * It works across the whole selection rather than on the ancestor of the
+ * cursor: with several lines selected, only looking at `$from` left every other
+ * item as a plain bullet -- and with a text selection inside a single paragraph
+ * it found no list item at all, so the checkbox was silently never applied.
  */
 function toggleTaskList(state, dispatch, view) {
-  const item = findAncestor(state, nodes.list_item);
+  const items = listItemsInSelection(state);
 
-  if (!item) {
-    // Not in a list yet: create one, then re-run against the new state to tick
-    // the item that was just produced.
+  if (!items.length) {
+    // Not in a list yet: wrap first, then tick whatever items that produced.
     return wrapInList(nodes.bullet_list)(state, (tr) => {
       if (!dispatch) return;
       dispatch(tr);
+
       const next = view.state;
-      const created = findAncestor(next, nodes.list_item);
-      if (created) {
-        view.dispatch(next.tr.setNodeMarkup(created.pos, null, {
-          ...created.node.attrs,
-          checked: false,
-        }));
+      const created = listItemsInSelection(next);
+      if (!created.length) return;
+
+      // setNodeMarkup never changes the document size, so the positions
+      // gathered above stay valid across the whole loop.
+      const ticked = next.tr;
+      for (const { node, pos } of created) {
+        ticked.setNodeMarkup(pos, null, { ...node.attrs, checked: false });
       }
+      view.dispatch(ticked);
     }, view);
   }
 
   if (dispatch) {
-    const checked = item.node.attrs.checked === null ? false : null;
-    dispatch(state.tr.setNodeMarkup(item.pos, null, { ...item.node.attrs, checked }));
+    // Mixed selection counts as "not yet tasks": one click makes it uniform.
+    const makeTask = items.some((i) => i.node.attrs.checked === null);
+    const tr = state.tr;
+    for (const { node, pos } of items) {
+      tr.setNodeMarkup(pos, null, { ...node.attrs, checked: makeTask ? false : null });
+    }
+    dispatch(tr);
   }
   return true;
 }
@@ -187,7 +210,12 @@ function setLink(state, dispatch) {
 }
 
 function insertImage(state, dispatch) {
-  const src = window.prompt("Image URL:", "");
+  // Say it up front: `img-src data: blob:` blocks every remote or relative
+  // source, so any other URL is written into the Markdown but shows as a broken
+  // image here. Better to state that than let the user find out.
+  const src = window.prompt(
+    "Image URL — only data: URIs display here, remote images are blocked by the security policy:",
+    "");
   if (!src) return false;
   const alt = window.prompt("Alternative text:", "") || null;
   return insertNode(nodes.image, { src, alt })(state, dispatch);
@@ -397,7 +425,11 @@ export function createRichEditor({ parent, onChange, onState }) {
       taskList: () => run(toggleTaskList),
       toggleChecked: () => run(toggleChecked),
       blockquote: () => run(wrapIn(nodes.blockquote)),
-      lift: () => run(lift),
+
+      // Inside a list, plain `lift` pulls the item out of the list entirely
+      // instead of raising it one level -- so try liftListItem first and keep
+      // `lift` only for what is not a list (a block quote, typically).
+      outdent: () => run(chainCommands(liftListItem(nodes.list_item), lift)),
       horizontalRule: () => run(insertNode(nodes.horizontal_rule)),
       table: () => run(insertTable()),
       addColumn: () => run(addColumnAfter),

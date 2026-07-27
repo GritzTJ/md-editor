@@ -216,6 +216,7 @@ npm run dev &
 npm install --no-save puppeteer
 node test/browser.mjs      # 77 end-to-end tests
 node test/roundtrip.mjs    # 33 Markdown constructs, round-tripped
+node test/buttons.mjs      # 41 controls, one assertion each
 ```
 
 `browser.mjs` drives a real Chrome against the served application. It checks
@@ -228,6 +229,13 @@ carrying the current document with it.
 `roundtrip.mjs` is the safety net for the Edit preview mode: for every Markdown
 construct it compares the rendering before and after a round trip, and checks a
 second pass no longer changes the source.
+
+`buttons.mjs` clicks every control and asserts a concrete effect. It exists
+because two of them were wrong and untested: **Tasks** produced a plain bullet
+when text was selected rather than a cursor, and **Outdent** pulled an item out
+of its list instead of raising it one level. It removes the File System Access
+API before the page loads, so the download fallbacks are exercised whatever the
+origin.
 
 `puppeteer` is not a project dependency — it would pull down a full Chrome on
 every `npm install`. To test the image rather than a local build:
@@ -248,6 +256,7 @@ build.mjs           esbuild bundle -> single HTML file + CSP + digests
 verify.mjs          checks on the produced file
 test/browser.mjs    end-to-end tests
 test/roundtrip.mjs  Markdown <-> ProseMirror round-trip fidelity
+test/buttons.mjs    every control, one assertion each
 nginx/default.conf  security headers, GET/HEAD only
 Dockerfile          multi-stage build -> unprivileged nginx
 ```
