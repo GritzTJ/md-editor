@@ -1,76 +1,76 @@
 # md-editor
 
-Éditeur et visualiseur Markdown qui s'exécute **entièrement dans le navigateur**.
-Le serveur livre un fichier HTML et n'entend plus jamais parler du document :
-aucune requête réseau n'est émise après le chargement de la page, et la politique
-de sécurité du document demande au navigateur d'en bloquer toute tentative.
+A Markdown editor and viewer that runs **entirely in the browser**. The server
+hands over one HTML file and never hears about the document again: no network
+request is made after the page loads, and the document's security policy asks
+the browser to block any attempt to make one.
 
-Le document s'édite de deux façons, au choix et en même temps : **en source**,
-avec coloration syntaxique, et **en rendu**, directement dans le document mis en
-forme, avec un ruban de mise en forme. Les deux vues restent synchronisées.
+The document can be edited two ways, interchangeably and at the same time: **as
+source**, with syntax highlighting, and **as rendered output**, directly in the
+formatted document, with a formatting ribbon. The two views stay in sync.
 
-L'application tient en un seul fichier de ~960 Ko (~330 Ko compressés), sans
-dépendance externe à l'exécution.
+The application is a single file of ~960 kB (~330 kB compressed), with no
+runtime dependency on anything external.
 
 ---
 
-## Ce que le serveur peut et ne peut pas voir
+## What the server can and cannot see
 
-C'est le cœur du projet, donc autant être précis.
+This is the point of the project, so it is worth being precise.
 
-**Ce qui est garanti**, pour la page telle qu'elle a été reçue :
+**What is guaranteed**, for the page as it was received:
 
-| Directive CSP | Effet |
+| CSP directive | Effect |
 | --- | --- |
-| `default-src 'none'` | rien ne se charge par défaut |
-| `connect-src 'none'` | ni `fetch`, ni `XMLHttpRequest`, ni WebSocket, ni `sendBeacon` |
-| `img-src data: blob:` | aucune image distante, y compris celles écrites dans votre Markdown |
-| `script-src 'sha256-…'` | seul le script livré avec la page peut s'exécuter |
-| `form-action 'none'` | aucune soumission de formulaire |
-| `base-uri 'none'` | impossible de détourner les URL relatives |
-| `frame-ancestors 'none'` | la page ne peut pas être encadrée par un tiers |
+| `default-src 'none'` | nothing loads by default |
+| `connect-src 'none'` | no `fetch`, no `XMLHttpRequest`, no WebSocket, no `sendBeacon` |
+| `img-src data: blob:` | no remote image, including ones written in your Markdown |
+| `script-src 'sha256-…'` | only the script shipped with the page may run |
+| `form-action 'none'` | no form submission |
+| `base-uri 'none'` | relative URLs cannot be hijacked |
+| `frame-ancestors 'none'` | the page cannot be framed by a third party |
 
-Le script est autorisé par son **condensat SHA-256**, calculé à la construction
-sur les octets exacts du fichier. Un octet modifié après coup et le navigateur
-refuse purement et simplement de l'exécuter.
+The script is allowed by its **SHA-256 digest**, computed at build time over the
+exact bytes of the file. Change one byte afterwards and the browser flatly
+refuses to run it.
 
-**La limite, qu'il faut connaître :** un serveur compromis peut servir une
-*autre* page, avec une autre CSP. Les garanties ci-dessus portent sur le
-document reçu, pas sur le serveur. Tant que vous rechargez la page depuis le
-serveur, vous lui faites confiance à chaque visite.
+**The limit worth knowing:** a compromised server can serve a *different* page,
+with a different CSP. The guarantees above cover the document you received, not
+the server. As long as you reload the page from the server, you trust it on
+every visit.
 
-**La parade :** cliquez une fois sur **Télécharger l'app**, puis travaillez
-sur le fichier `md-editor.html` obtenu, ouvert en `file://`. Le serveur sort
-alors définitivement de la boucle. Le condensat du fichier livré est publié à
-chaque construction (`dist/index.html.sha256`, et dans le résumé du workflow),
-ce qui permet de vérifier que vous avez bien reçu la version attendue :
+**The way out:** click **Download app** once, then work on the resulting
+`md-editor.html` opened from `file://`. The server is then out of the loop for
+good. The digest of the delivered file is published on every build
+(`dist/index.html.sha256`, and in the workflow summary), so you can check you
+received the version you expected:
 
 ```bash
-curl -s https://votre-instance/ | sha256sum
-curl -s https://votre-instance/index.html.sha256
+curl -s https://your-instance/ | sha256sum
+curl -s https://your-instance/index.html.sha256
 ```
 
 ---
 
-## Démarrage
+## Getting started
 
 ```bash
 docker run --rm -p 8080:8080 ghcr.io/GritzTJ/md-editor:latest
 ```
 
-Puis <http://localhost:8080>.
+Then <http://localhost:8080>.
 
-Avec Docker Compose — le conteneur tourne en lecture seule, sans privilèges et
-sans aucun volume, puisqu'il n'a rien à persister :
+With Docker Compose — the container runs read-only, unprivileged and with no
+volume at all, since it has nothing to persist:
 
 ```bash
 docker compose up -d
 ```
 
-L'image est publiée pour `linux/amd64` et `linux/arm64`. Elle expose le port
-**8080** et tourne en **uid 101**, sans root.
+The image is published for `linux/amd64` and `linux/arm64`. It exposes port
+**8080** and runs as **uid 101**, never root.
 
-### Vérifier l'origine de l'image
+### Verifying where the image came from
 
 ```bash
 gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-editor
@@ -78,172 +78,183 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 
 ---
 
-## Fonctionnalités
+## Features
 
-- **Édition de la source** : CodeMirror 6, coloration syntaxique du Markdown,
-  blocs de code colorés selon leur langage, prolongement automatique des listes,
-  numéros de ligne, annuler/rétablir.
-- **Édition du rendu** : bouton **Modifier le rendu**, et le document mis en forme devient
-  la surface de saisie, avec un ruban : gras, italique, barré, code, niveaux de
-  titre, listes à puces / numérotées / de tâches, citation, séparateur, lien,
-  image, tableau (avec ajout et suppression de lignes et colonnes). Les
-  raccourcis Markdown continuent de fonctionner : taper `## ` crée un titre,
-  `- ` une liste, ` ``` ` un bloc de code.
-- **Aperçu en direct** : rendu GFM (tableaux, listes de tâches, barré) assaini
-  par DOMPurify, défilement synchronisé, séparateur ajustable.
-- **Trois dispositions** : source seule, vue partagée, rendu seul. La
-  disposition et le mode d'édition sont indépendants : en vue « Source », le
-  bouton **Modifier le rendu** est simplement désactivé — il ne change jamais la
-  disposition choisie.
-- **Fichiers locaux** : `Ouvrir` / `Enregistrer` écrivent de vrais fichiers `.md`
-  via l'API File System Access (Chrome, Edge). Sur Firefox et Safari, repli
-  automatique sur import de fichier et téléchargement.
-- **Exports** : le rendu en HTML autonome, ou l'application elle-même.
-- **Thème clair / sombre**, suivant le réglage système par défaut.
+- **Source editing**: CodeMirror 6, Markdown syntax highlighting, code blocks
+  coloured per language, automatic list continuation, line numbers, undo/redo.
+- **Preview editing**: hit **Edit preview** and the formatted document becomes
+  the writing surface, with a ribbon — bold, italic, strikethrough, code,
+  heading levels, bulleted / numbered / task lists, block quote, divider, link,
+  image, table (with row and column add/remove). Markdown shortcuts keep
+  working: typing `## ` makes a heading, `- ` a list, ` ``` ` a code block.
+- **Live preview**: GFM rendering (tables, task lists, strikethrough) sanitised
+  by DOMPurify, synchronised scrolling, draggable splitter.
+- **Three layouts**: source only, split, preview only. Layout and editing mode
+  are independent: in the Source layout the **Edit preview** button is simply
+  disabled — it never changes the layout you picked.
+- **Local files**: `Open` / `Save` write real `.md` files through the File
+  System Access API. Elsewhere, an automatic fallback to file import and
+  download (see the caveat below).
+- **Exports**: the rendered document as standalone HTML, or the application
+  itself.
+- **Light / dark theme**, following the system setting by default.
 
-### Raccourcis
+### Shortcuts
 
-| Raccourci | Action |
+| Shortcut | Action |
 | --- | --- |
-| `Ctrl`+`O` | Ouvrir un fichier |
-| `Ctrl`+`S` | Enregistrer |
-| `Ctrl`+`Maj`+`S` | Enregistrer sous |
-| `Ctrl`+`Z` / `Ctrl`+`Y` | Annuler / rétablir |
+| `Ctrl`+`O` | Open a file |
+| `Ctrl`+`S` | Save |
+| `Ctrl`+`Shift`+`S` | Save as |
+| `Ctrl`+`Z` / `Ctrl`+`Y` | Undo / redo |
 
-Dans le rendu, quand **Modifier le rendu** est actif :
+In the preview, with **Edit preview** on:
 
-| Raccourci | Action |
+| Shortcut | Action |
 | --- | --- |
-| `Ctrl`+`B` / `Ctrl`+`I` | Gras / italique |
-| `Ctrl`+`Maj`+`X` | Barré |
+| `Ctrl`+`B` / `Ctrl`+`I` | Bold / italic |
+| `Ctrl`+`Shift`+`X` | Strikethrough |
 | `Ctrl`+`E` | Code |
-| `Ctrl`+`K` | Lien |
-| `Ctrl`+`Maj`+`1..6` | Titre de niveau 1 à 6 |
-| `Tab` / `Maj`+`Tab` | Cellule suivante / précédente, ou retrait de liste |
+| `Ctrl`+`K` | Link |
+| `Ctrl`+`Shift`+`1..6` | Heading level 1 to 6 |
+| `Tab` / `Shift`+`Tab` | Next / previous cell, or list indentation |
 
 ---
 
-## Stockage
+## Saving files: the secure-context caveat
 
-**Par défaut, rien n'est conservé.** Ni brouillon, ni historique, ni
-préférence de contenu — seuls le thème et le mode d'affichage sont mémorisés.
+`Save` writes straight back into the file you opened, and `Save as` opens a real
+file dialog — but only through the **File System Access API**, which browsers
+expose exclusively in a *secure context*.
 
-La case **Brouillon local** écrit le document dans le `localStorage` du
-navigateur pour qu'il survive à un rechargement. Elle est décochée par défaut,
-volontairement : le contenu est alors stocké **en clair sur le poste**. Le
-décochage efface immédiatement le brouillon, et un bouton dédié permet de le
-supprimer à tout moment.
+| Origin | API available |
+| --- | --- |
+| `https://…` | yes |
+| `http://localhost:8080` | yes |
+| `http://192.0.2.10:8080` | **no** |
 
----
+Served over plain HTTP on an IP address, the API is absent entirely and both
+buttons fall back to downloading a copy. `Save as` then asks for a file name, so
+it still differs from `Save`, but nothing is written back to the original file.
+Firefox and Safari do not implement the API at all and behave the same way.
 
-## Éditer le rendu : ce qu'il faut savoir
-
-Markdown → HTML est direct ; le chemin inverse ne l'est pas. Quand vous éditez
-dans le rendu, la source n'est pas modifiée par retouches successives : elle est
-**régénérée** depuis le document. Trois conséquences, par ordre d'importance :
-
-1. **Tant que le bouton « Modifier le rendu » reste inactif, la source est
-   intacte au caractère près.** Le mode lecture ne réécrit jamais rien.
-2. **Une fois activé, vos conventions d'écriture sont normalisées.** `*` devient
-   `-` pour les puces, les titres soulignés deviennent des `#`, l'indentation des
-   listes est uniformisée. Le sens est préservé, la forme est standardisée.
-3. **Rien n'est perdu.** Le modèle de document couvre tout ce que l'aperçu sait
-   afficher — tableaux avec alignement, cases à cocher, barré — et le HTML brut
-   écrit dans le Markdown est conservé mot pour mot, présenté comme un bloc
-   distinct non modifiable dans le rendu (éditez-le dans le panneau source).
-
-Ce n'est pas une promesse en l'air : `test/roundtrip.mjs` vérifie sur 33
-constructions que le rendu est identique après un aller-retour, et que la source
-ne dérive plus au passage suivant.
+If direct file writing matters to you, reach the app over HTTPS or through
+`localhost`.
 
 ---
 
-## Limites connues
+## Storage
 
-- **Les images distantes ne s'affichent pas.** `![](https://…)` est bloqué par
-  `img-src`. C'est délibéré : autoriser les images distantes rouvrirait un canal
-  de sortie vers un tiers. Les images en `data:` fonctionnent.
-- **`Ctrl`+`S` n'écrase le fichier d'origine que sur Chrome et Edge**, seuls à
-  implémenter l'API File System Access. Ailleurs, l'enregistrement produit un
-  téléchargement.
-- **Pas de mode hors ligne automatique** (pas de service worker). Le fichier
-  autonome téléchargeable joue ce rôle, de façon plus vérifiable.
-- **Le HTML brut ne s'édite pas dans le rendu.** Il y apparaît comme un bloc
-  encadré, conservé tel quel ; modifiez-le dans le panneau source. Comme toute
-  image ou tout bloc atomique, le sélectionner puis taper le remplace — c'est
-  annulable par `Ctrl`+`Z`.
-- **Taper `<details>` dans la source insère automatiquement `</details>`**,
-  comportement de `@codemirror/lang-html` hérité du parseur HTML imbriqué. Coller
-  du HTML déjà complet n'y est pas soumis.
+**Nothing is kept by default.** No draft, no history, no content preference —
+only the theme and the layout are remembered.
+
+The **Local draft** checkbox writes the document into the browser's
+`localStorage` so it survives a reload. It is off by default, deliberately: the
+content is then stored **in clear text on the machine**. Unticking it erases the
+draft immediately, and a dedicated button removes it at any time.
 
 ---
 
-## Développement
+## Editing the preview: what to expect
+
+Markdown → HTML is straightforward; the reverse is not. When you edit in the
+preview, the source is not patched incrementally — it is **regenerated** from
+the document. Three consequences, most important first:
+
+1. **As long as the Edit preview button stays off, the source is byte-for-byte
+   intact.** Read-only mode never rewrites anything.
+2. **Once it is on, your writing conventions are normalised.** `*` becomes `-`
+   for bullets, underlined headings become `#`, list indentation is made
+   uniform. Meaning is preserved, form is standardised.
+3. **Nothing is lost.** The document model covers everything the preview can
+   display — tables with alignment, task checkboxes, strikethrough — and raw
+   HTML written in the Markdown is kept word for word, shown as a distinct block
+   that is not editable in the preview (edit it in the source pane).
+
+That last point is not an empty promise: `test/roundtrip.mjs` checks 33
+constructs, verifying both that the rendering is identical after a round trip
+and that the source stops changing on the next pass.
+
+---
+
+## Known limitations
+
+- **Remote images do not display.** `![](https://…)` is blocked by `img-src`.
+  This is deliberate: allowing remote images would reopen an egress channel to a
+  third party. `data:` images work.
+- **Direct file writing needs a secure context** — see the section above.
+- **No automatic offline mode** (no service worker). The downloadable standalone
+  file plays that role, in a more verifiable way.
+- **Raw HTML is not editable in the preview.** It appears there as a framed
+  block, kept verbatim; edit it in the source pane. Like any image or atomic
+  block, selecting it and typing replaces it — undo with `Ctrl`+`Z`.
+- **Typing `<details>` in the source auto-inserts `</details>`**, behaviour
+  inherited from `@codemirror/lang-html` through the nested HTML parser. Pasting
+  already-complete HTML is not affected.
+
+---
+
+## Development
 
 ```bash
 npm install
-npm run build     # produit dist/index.html
-npm run dev       # construit puis sert sur :8080 avec les en-têtes de production
-node verify.mjs   # vérifie le fichier construit
+npm run build     # produces dist/index.html
+npm run dev       # builds, then serves on :8080 with the production headers
+node verify.mjs   # checks the built file
 ```
 
-`verify.mjs` contrôle le fichier réellement produit, pas les sources : validité
-du script une fois extrait du HTML, correspondance du condensat CSP, absence de
-ressource externe et absence de primitive réseau dans le bundle. Il est rejoué
-pendant la construction de l'image, de sorte qu'aucune image ne peut être
-produite si l'un de ces points casse.
+`verify.mjs` inspects the file actually produced, not the sources: that the
+script is still valid once extracted from the HTML, that the CSP digest matches,
+that no external resource is referenced and that no network primitive appears in
+the bundle. It is replayed during the image build, so no image can be produced
+if any of those break.
 
-### Tests navigateur
+### Browser tests
 
 ```bash
 npm run dev &
 npm install --no-save puppeteer
-node test/browser.mjs      # 74 tests de bout en bout
-node test/roundtrip.mjs    # 33 constructions Markdown, aller-retour
+node test/browser.mjs      # 77 end-to-end tests
+node test/roundtrip.mjs    # 33 Markdown constructs, round-tripped
 ```
 
-`browser.mjs` tourne dans un vrai Chrome, contre l'application servie. Il vérifie
-notamment que le navigateur bloque effectivement `fetch`, WebSocket,
-`sendBeacon`, les images distantes et les imports dynamiques ; que l'aperçu
-neutralise scripts, `onerror`, `javascript:`, iframes et formulaires ; que
-l'édition du rendu se répercute dans la source et réciproquement ; et que le
-fichier autonome démarre en `file://` sans emporter le document en cours.
+`browser.mjs` drives a real Chrome against the served application. It checks
+that the browser really does block `fetch`, WebSocket, `sendBeacon`, remote
+images and dynamic imports; that the preview neutralises scripts, `onerror`,
+`javascript:`, iframes and forms; that preview edits reach the source and the
+other way round; and that the standalone file starts from `file://` without
+carrying the current document with it.
 
-`roundtrip.mjs` est le filet de sécurité de ce mode : pour chaque
-construction Markdown, il compare le rendu avant et après un aller-retour, et
-vérifie qu'un second passage ne modifie plus la source.
+`roundtrip.mjs` is the safety net for the Edit preview mode: for every Markdown
+construct it compares the rendering before and after a round trip, and checks a
+second pass no longer changes the source.
 
-`puppeteer` n'est pas une dépendance du projet — il téléchargerait un Chrome
-complet à chaque `npm install`. Pour tester l'image plutôt que le build local :
+`puppeteer` is not a project dependency — it would pull down a full Chrome on
+every `npm install`. To test the image rather than a local build:
 
 ```bash
 docker run -d -p 8080:8080 ghcr.io/GritzTJ/md-editor:latest
 TARGET=http://localhost:8080/ node test/browser.mjs
 ```
 
-### Organisation
+### Layout
 
 ```
-src/app.js          interface, synchronisation des deux panneaux, E/S fichier
-src/markdown.js     moteur partagé : markdown-it, schéma, analyse, sérialisation
-src/rich.js         éditeur ProseMirror et commandes du ruban
-src/styles.css      thème clair/sombre, styles du rendu
-build.mjs           bundle esbuild -> fichier HTML unique + CSP + condensats
-verify.mjs          contrôles sur le fichier produit
-test/browser.mjs    tests de bout en bout
-test/roundtrip.mjs  fidélité de l'aller-retour Markdown <-> ProseMirror
-nginx/default.conf  en-têtes de sécurité, méthodes GET/HEAD uniquement
-Dockerfile          construction multi-étapes -> nginx non privilégié
+src/app.js          interface, pane synchronisation, file I/O
+src/markdown.js     shared engine: markdown-it, schema, parsing, serialisation
+src/rich.js         ProseMirror editor and ribbon commands
+src/styles.css      light/dark theme, rendered-document styles
+build.mjs           esbuild bundle -> single HTML file + CSP + digests
+verify.mjs          checks on the produced file
+test/browser.mjs    end-to-end tests
+test/roundtrip.mjs  Markdown <-> ProseMirror round-trip fidelity
+nginx/default.conf  security headers, GET/HEAD only
+Dockerfile          multi-stage build -> unprivileged nginx
 ```
 
-`src/markdown.js` est le point sensible : source unique de l'analyse et de la
-sérialisation, c'est lui qui garantit que ce qui s'affiche et ce qui s'édite ne
-peuvent pas diverger.
-
-Le `<body>` livré ne contient qu'un conteneur vide : toute l'interface est
-construite en JavaScript. C'est ce qui permet au bouton « Télécharger l'app » de
-reconstituer fidèlement le fichier d'origine depuis le DOM, sans risquer d'y
-embarquer le document en cours d'édition.
+`src/markdown.js` is the sensitive one: as the single source of both parsing and
+serialisation, it is what guarantees that what is displayed and what is edited
+cannot drift apart.
 
 ---
 

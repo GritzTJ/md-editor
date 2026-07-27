@@ -1,9 +1,9 @@
 # -----------------------------------------------------------------------------
-# Construction et publication de l'image sur le GitHub Container Registry.
+# Build and publish the image to the GitHub Container Registry.
 #
-# `${{ github.repository }}` designe le depot courant : le workflow publie donc
-# sur ghcr.io/<owner>/<repo> sans nom en dur, quel que soit le compte qui
-# heberge le projet ou le fork.
+# `${{ github.repository }}` is the current repository, so the workflow pushes
+# to ghcr.io/<owner>/<repo> with no hard-coded name, whichever account hosts the
+# project or the fork.
 # -----------------------------------------------------------------------------
 
 name: publish
@@ -25,9 +25,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Les verifications tournent hors Docker pour donner un retour rapide et un
-  # journal lisible ; le Dockerfile les rejoue de toute facon pendant le build,
-  # afin qu'aucune image ne puisse etre produite sans elles.
+  # Checks run outside Docker for fast feedback and a readable log; the
+  # Dockerfile replays them during the build anyway, so no image can be produced
+  # without them.
   verify:
     runs-on: ubuntu-latest
     steps:
@@ -42,19 +42,19 @@ jobs:
       - run: npm run build
       - run: node verify.mjs
 
-      # Le condensat du fichier reellement livre : c'est la valeur qu'un
-      # utilisateur peut comparer a ce que son navigateur a recu.
-      - name: Publier le condensat du fichier livre
+      # Digest of the file actually delivered: the value a user can compare
+      # against what their browser received.
+      - name: Publish the delivered file digest
         run: |
-          echo '### Fichier livre' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Delivered file' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat dist/index.html.sha256 >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # puppeteer est installe ici seulement : l'ajouter aux devDependencies
-      # imposerait le telechargement d'un Chrome complet a chaque `npm install`
-      # et a chaque construction d'image.
-      - name: Tests navigateur
+      # puppeteer is installed here only: adding it to devDependencies would
+      # force a full Chrome download on every `npm install` and every image
+      # build.
+      - name: Browser tests
         run: |
           set -euo pipefail
           npm install --no-save puppeteer
@@ -86,9 +86,9 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      # Sur une pull request on construit sans publier : l'image n'est validee
-      # que si elle se construit, sans exposer le registre a du code non fusionne.
-      - name: Authentification au registre
+      # On a pull request the image is built but not pushed: it is validated
+      # without exposing the registry to unmerged code.
+      - name: Log in to the registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -121,10 +121,10 @@ jobs:
           provenance: true
           sbom: true
 
-      # Attestation de provenance : relie l'image publiee au depot, au commit et
-      # au workflow qui l'ont produite. Verification :
+      # Provenance attestation: ties the published image to the repository, the
+      # commit and the workflow that produced it. Verify with:
       #   gh attestation verify oci://ghcr.io/OWNER/md-editor:latest --repo OWNER/md-editor
-      - name: Attester la provenance
+      - name: Attest provenance
         if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@v2
         with:
@@ -132,13 +132,14 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-  # Verifie que l'image publiee sert bien la page et ses en-tetes de securite.
+  # Checks that the published image really serves the page and its security
+  # headers.
   smoke:
     needs: publish
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Demarrer le conteneur et controler les en-tetes
+      - name: Start the container and check the headers
         run: |
           set -euo pipefail
           IMAGE="${REGISTRY}/${IMAGE_NAME}:sha-${GITHUB_SHA}"
@@ -159,16 +160,16 @@ jobs:
             "referrer-policy"
           do
             echo "$headers" | tr 'A-Z' 'a-z' | grep -q "$expected" \
-              || { echo "en-tete manquant : $expected"; exit 1; }
+              || { echo "missing header: $expected"; exit 1; }
           done
 
           curl -sf http://localhost:8080/ | grep -q 'id="app-js"' \
-            || { echo "la page ne contient pas l'application"; exit 1; }
+            || { echo "the page does not contain the application"; exit 1; }
 
-          # Le condensat servi doit correspondre au fichier construit.
+          # The served digest must match the built file.
           served=$(curl -sf http://localhost:8080/ | sha256sum | cut -d' ' -f1)
           declared=$(curl -sf http://localhost:8080/index.html.sha256 | cut -d' ' -f1)
           [ "$served" = "$declared" ] \
-            || { echo "condensat different : servi $served, annonce $declared"; exit 1; }
+            || { echo "digest mismatch: served $served, announced $declared"; exit 1; }
 
-          echo "l'image publiee se comporte comme attendu"
+          echo "the published image behaves as expected"

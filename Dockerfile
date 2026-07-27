@@ -1,36 +1,34 @@
 # -----------------------------------------------------------------------------
-# md-editor -- image de distribution.
+# md-editor -- distribution image.
 #
-# L'image ne contient qu'un fichier HTML et un nginx pour le servir. Elle n'a
-# ni base de donnees, ni etat, ni ecriture disque : le contenu edite ne quitte
-# jamais le navigateur, il n'y a donc rien a persister cote serveur.
+# The image holds one HTML file and an nginx to serve it. No database, no state,
+# no disk writes: the edited content never leaves the browser, so there is
+# nothing to persist server-side.
 # -----------------------------------------------------------------------------
 
-# --- etape 1 : construction ---------------------------------------------------
+# --- stage 1: build -----------------------------------------------------------
 FROM node:22-alpine AS build
 
 WORKDIR /src
 
-# Les manifestes d'abord : cette couche est mise en cache tant que les
-# dependances ne bougent pas.
+# Manifests first: this layer stays cached as long as dependencies do not move.
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY build.mjs verify.mjs ./
 COPY src ./src
 
-# La verification fait partie du build : une image ne peut pas etre produite
-# avec un condensat CSP desynchronise ou un appel reseau introduit par une
-# dependance.
+# Verification is part of the build: no image can be produced with a CSP digest
+# out of step, or with a network call introduced by a dependency.
 RUN npm run build && node verify.mjs
 
-# --- etape 2 : execution ------------------------------------------------------
-# Image non privilegiee : nginx tourne en uid 101, ecoute sur 8080, et n'a
-# besoin d'aucune capacite particuliere.
+# --- stage 2: runtime ---------------------------------------------------------
+# Unprivileged image: nginx runs as uid 101, listens on 8080, and needs no
+# special capability.
 FROM nginxinc/nginx-unprivileged:1.29-alpine
 
 LABEL org.opencontainers.image.title="md-editor" \
-      org.opencontainers.image.description="Editeur Markdown fonctionnant entierement dans le navigateur : le serveur ne voit jamais le contenu." \
+      org.opencontainers.image.description="A Markdown editor that runs entirely in the browser: the server never sees the content." \
       org.opencontainers.image.licenses="MIT"
 
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf

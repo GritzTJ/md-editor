@@ -1,20 +1,19 @@
 /* ---------------------------------------------------------------------------
- * md-editor -- editeur / visualiseur Markdown entierement cote client.
+ * md-editor -- a Markdown editor that runs entirely in the browser.
  *
- * Regle absolue de ce fichier : AUCUN acces reseau. Pas de fetch, pas de
- * XMLHttpRequest, pas de WebSocket, pas de balise <img> distante, pas de
- * police web. La CSP du document (`default-src 'none'; connect-src 'none'`)
- * transforme cette regle en garantie appliquee par le navigateur : meme si ce
- * script etait remplace par une version malveillante, il ne pourrait pas
- * sortir le contenu du document hors de l'onglet.
+ * Hard rule for this file: NO network access. No fetch, no XMLHttpRequest, no
+ * WebSocket, no remote <img>, no web font. The document's CSP
+ * (`default-src 'none'; connect-src 'none'`) turns that rule into a guarantee
+ * the browser enforces: even if this script were swapped for a malicious one,
+ * it could not move the document out of the tab.
  *
- * Toute l'interface est construite en JS pour que le document HTML porteur
- * reste un squelette vide -- ce qui rend la reconstruction du fichier autonome
- * (bouton « Telecharger l'app ») triviale et sans risque de fuite de contenu.
+ * The whole interface is built in JS so the HTML shell stays an empty
+ * skeleton -- which is what makes rebuilding the standalone file (the
+ * "Download app" button) trivial and unable to leak the user's document.
  *
- * Le document est edite de deux facons : en source, dans CodeMirror, et en
- * rendu, dans ProseMirror. Le texte de CodeMirror fait toujours foi ; voir la
- * section « Synchronisation » pour le detail.
+ * The document is edited two ways: as source in CodeMirror, and as rendered
+ * output in ProseMirror. The CodeMirror text is always authoritative; see the
+ * "Synchronisation" section for how the two are kept aligned.
  * ------------------------------------------------------------------------- */
 
 import { EditorState } from "@codemirror/state";
@@ -44,11 +43,10 @@ import { renderMarkdown } from "./markdown.js";
 import { createRichEditor } from "./rich.js";
 
 /* ===========================================================================
- * Preferences locales
+ * Local preferences
  *
- * Seules les preferences d'affichage sont ecrites d'office : elles ne
- * contiennent aucune donnee utilisateur. Le brouillon du document, lui, n'est
- * ecrit que si l'utilisateur coche explicitement « Brouillon local ».
+ * Only display preferences are written unprompted: they hold no user data.
+ * The document draft is stored only if the user explicitly ticks "Local draft".
  * ======================================================================== */
 
 const KEY = {
@@ -61,8 +59,8 @@ const KEY = {
   draftName: "mdedit.draftName",
 };
 
-// localStorage peut lever (mode prive, file:// verrouille, quota). Jamais
-// d'exception propagee : l'editeur doit fonctionner meme sans stockage.
+// localStorage can throw (private mode, locked file://, quota). Never let that
+// propagate: the editor must work without any storage at all.
 const store = {
   get(k) {
     try { return localStorage.getItem(k); } catch { return null; }
@@ -76,10 +74,10 @@ const store = {
 };
 
 /* ===========================================================================
- * Coloration syntaxique du panneau source
+ * Source pane syntax highlighting
  *
- * Les couleurs ne sont pas fixees ici mais deleguees a des classes CSS, ce qui
- * permet au theme clair/sombre de la feuille de style de les piloter.
+ * Colours are not hard-coded here but delegated to CSS classes, so the
+ * light/dark theme in the stylesheet drives them.
  * ======================================================================== */
 
 const mdHighlight = HighlightStyle.define([
@@ -118,47 +116,47 @@ const cmTheme = EditorView.theme({
 });
 
 /* ===========================================================================
- * Etat de l'application
+ * Application state
  * ======================================================================== */
 
 const state = {
-  fileHandle: null, // FileSystemFileHandle si l'API est disponible
-  fileName: "sans-titre.md",
-  savedText: "", // contenu de reference pour l'indicateur « modifie »
+  fileHandle: null, // FileSystemFileHandle when the API is available
+  fileName: "untitled.md",
+  savedText: "", // reference content for the "modified" indicator
   autosave: store.get(KEY.autosave) === "1",
   richMode: store.get(KEY.rich) === "1",
 };
 
-const SAMPLE = `# Editeur Markdown local
+const SAMPLE = `# Local Markdown editor
 
-Tout se passe **dans cet onglet**. Le serveur qui a livre cette page ne recoit
-jamais le contenu que vous tapez : il n'y a aucun appel reseau dans le code, et
-la politique de securite du document (\`connect-src 'none'\`) l'interdit au
-niveau du navigateur.
+Everything happens **in this tab**. The server that delivered this page never
+receives what you type: there is no network call anywhere in the code, and the
+document's security policy (\`connect-src 'none'\`) forbids one at the browser
+level.
 
-## Deux facons d'editer
+## Two ways to edit
 
-- [x] La source, a gauche, avec coloration syntaxique
-- [x] Le rendu, a droite : activez **Edition** pour y ecrire directement
-- [ ] Les deux reste~~nt~~ toujours synchronises
+- [x] The source, on the left, with syntax highlighting
+- [x] The preview, on the right — turn on **Edit preview** to write in it
+- [ ] Both stay ~~mostly~~ always in sync
 
-> Pour un document contenant des secrets, le mode le plus sur reste :
-> telecharger l'application une fois, puis l'ouvrir en \`file://\`.
+> For a document holding secrets, the safest route is still: download the app
+> once, then open it from \`file://\`.
 
-| Raccourci | Action |
+| Shortcut | Action |
 | --- | --- |
-| \`Ctrl\`+\`O\` | Ouvrir |
-| \`Ctrl\`+\`S\` | Enregistrer |
-| \`Ctrl\`+\`Maj\`+\`S\` | Enregistrer sous |
+| \`Ctrl\`+\`O\` | Open |
+| \`Ctrl\`+\`S\` | Save |
+| \`Ctrl\`+\`Shift\`+\`S\` | Save as |
 
 \`\`\`js
-// Les blocs de code sont colores dans l'editeur comme dans l'apercu.
+// Code blocks are highlighted in the editor and in the preview alike.
 const secret = process.env.API_TOKEN;
 \`\`\`
 `;
 
 /* ===========================================================================
- * Construction de l'interface
+ * Building the interface
  * ======================================================================== */
 
 const app = document.getElementById("app");
@@ -179,43 +177,41 @@ function button(label, title, onclick, cls = "") {
   return el("button", { type: "button", class: cls, title, onclick, text: label });
 }
 
-// --- barre d'outils principale ---------------------------------------------
+// --- main toolbar -----------------------------------------------------------
 
-const btnOpen = button("Ouvrir", "Ouvrir un fichier Markdown (Ctrl+O)", doOpen);
-const btnSave = button("Enregistrer", "Enregistrer (Ctrl+S)", doSave);
-const btnSaveAs = button("Enregistrer sous", "Enregistrer sous (Ctrl+Maj+S)", doSaveAs);
-const btnNew = button("Nouveau", "Vider l'editeur", doNew);
+const btnOpen = button("Open", "Open a Markdown file (Ctrl+O)", doOpen);
+const btnSave = button("Save", "Save (Ctrl+S)", doSave);
+const btnSaveAs = button("Save as", "Save under a different name (Ctrl+Shift+S)", doSaveAs);
+const btnNew = button("New", "Empty the editor", doNew);
 
-// « Source » plutot que « Editeur » : le voisin immediat est un bouton
-// d'edition, et deux libelles aussi proches pour deux notions differentes --
-// une disposition et un mode -- ne pouvaient que preter a confusion.
+// "Source" rather than "Editor": its neighbour is an edit toggle, and two
+// near-identical labels for two different notions -- a layout and a mode --
+// could only cause confusion.
 const viewButtons = {
-  editor: button("Source", "Afficher uniquement le texte source", () => setView("editor")),
-  split: button("Partage", "Afficher la source et le rendu", () => setView("split")),
-  preview: button("Rendu", "Afficher uniquement le document rendu", () => setView("preview")),
+  editor: button("Source", "Show the source text only", () => setView("editor")),
+  split: button("Split", "Show source and preview side by side", () => setView("split")),
+  preview: button("Preview", "Show the rendered document only", () => setView("preview")),
 };
-const segView = el("div", { class: "seg", role: "group", "aria-label": "Disposition" },
+const segView = el("div", { class: "seg", role: "group", "aria-label": "Layout" },
   viewButtons.editor, viewButtons.split, viewButtons.preview);
 
-const btnRich = button("Modifier le rendu",
-  "Ecrire directement dans le document rendu", toggleRich);
+const btnRich = button("Edit preview", "Write directly in the rendered document", toggleRich);
 
-const btnExport = button("Exporter HTML", "Enregistrer le rendu en HTML autonome", doExportHtml);
-const btnStandalone = button("Telecharger l'app",
-  "Enregistrer cette application en un fichier HTML utilisable hors ligne", doDownloadApp);
-const btnTheme = button("Theme", "Basculer clair / sombre", toggleTheme);
-const btnAbout = button("?", "Securite et fonctionnement", showAbout);
+const btnExport = button("Export HTML", "Save the rendered document as standalone HTML", doExportHtml);
+const btnStandalone = button("Download app",
+  "Save this application as a single HTML file usable offline", doDownloadApp);
+const btnTheme = button("Theme", "Switch light / dark", toggleTheme);
+const btnAbout = button("?", "Security and behaviour", showAbout);
 
 const chkAutosaveInput = el("input", { type: "checkbox" });
 chkAutosaveInput.checked = state.autosave;
 chkAutosaveInput.addEventListener("change", onAutosaveToggle);
 const chkAutosave = el("label", {
   class: "chk",
-  title: "Conserver un brouillon dans ce navigateur pour survivre a un rechargement.\nDesactive par defaut : le brouillon est stocke en clair sur ce poste.",
-}, chkAutosaveInput, el("span", { text: "Brouillon local" }));
+  title: "Keep a draft in this browser so it survives a reload.\nOff by default: the draft is stored in clear text on this machine.",
+}, chkAutosaveInput, el("span", { text: "Local draft" }));
 
-const btnClearDraft = button("Effacer le brouillon",
-  "Supprimer le brouillon conserve dans ce navigateur", doClearDraft);
+const btnClearDraft = button("Clear draft", "Delete the draft kept in this browser", doClearDraft);
 btnClearDraft.classList.add("hidden");
 
 const toolbar = el("header", { class: "tb" },
@@ -231,7 +227,7 @@ const toolbar = el("header", { class: "tb" },
   el("div", { class: "tb-spacer" }),
   chkAutosave, btnClearDraft, btnTheme, btnAbout);
 
-// Repli pour les navigateurs sans File System Access API.
+// Fallback for browsers without the File System Access API.
 const fileInput = el("input", {
   type: "file",
   class: "hidden",
@@ -239,11 +235,11 @@ const fileInput = el("input", {
   onchange: onFileInputChange,
 });
 
-// --- ruban de mise en forme -------------------------------------------------
+// --- formatting ribbon ------------------------------------------------------
 
 const blockSelect = el("select", {
   class: "rb-select",
-  title: "Style du paragraphe",
+  title: "Paragraph style",
   onchange: () => {
     const v = blockSelect.value;
     if (v === "p") rich.commands.paragraph();
@@ -252,8 +248,8 @@ const blockSelect = el("select", {
   },
 });
 for (const [value, label] of [
-  ["p", "Paragraphe"], ["h1", "Titre 1"], ["h2", "Titre 2"], ["h3", "Titre 3"],
-  ["h4", "Titre 4"], ["h5", "Titre 5"], ["h6", "Titre 6"], ["code", "Bloc de code"],
+  ["p", "Paragraph"], ["h1", "Heading 1"], ["h2", "Heading 2"], ["h3", "Heading 3"],
+  ["h4", "Heading 4"], ["h5", "Heading 5"], ["h6", "Heading 6"], ["code", "Code block"],
 ]) {
   blockSelect.append(el("option", { value, text: label }));
 }
@@ -265,46 +261,46 @@ const rbButton = (key, label, title, action, cls = "rb-btn") => {
   return b;
 };
 
-// Libelles en toutes lettres plutot qu'en pictogrammes : la CSP interdit toute
-// police externe, et les symboles hors du plan multilingue de base (emoji de
-// lien, d'image) s'affichent en carre vide sur les systemes sans police emoji.
-const ribbon = el("div", { class: "rb", role: "toolbar", "aria-label": "Mise en forme" },
-  rbButton("undo", "Annuler", "Annuler (Ctrl+Z)", () => rich.commands.undo()),
-  rbButton("redo", "Retablir", "Retablir (Ctrl+Y)", () => rich.commands.redo()),
+// Word labels rather than pictograms: the CSP forbids external fonts, and
+// symbols outside the basic multilingual plane (link, image emoji) render as
+// empty boxes on systems without an emoji font.
+const ribbon = el("div", { class: "rb", role: "toolbar", "aria-label": "Formatting" },
+  rbButton("undo", "Undo", "Undo (Ctrl+Z)", () => rich.commands.undo()),
+  rbButton("redo", "Redo", "Redo (Ctrl+Y)", () => rich.commands.redo()),
   el("div", { class: "tb-sep" }),
   blockSelect,
   el("div", { class: "tb-sep" }),
-  rbButton("strong", "G", "Gras (Ctrl+B)", () => rich.commands.strong(), "rb-btn rb-bold"),
-  rbButton("em", "I", "Italique (Ctrl+I)", () => rich.commands.em(), "rb-btn rb-italic"),
-  rbButton("strikethrough", "S", "Barre (Ctrl+Maj+X)", () => rich.commands.strikethrough(), "rb-btn rb-strike"),
+  rbButton("strong", "B", "Bold (Ctrl+B)", () => rich.commands.strong(), "rb-btn rb-bold"),
+  rbButton("em", "I", "Italic (Ctrl+I)", () => rich.commands.em(), "rb-btn rb-italic"),
+  rbButton("strikethrough", "S", "Strikethrough (Ctrl+Shift+X)", () => rich.commands.strikethrough(), "rb-btn rb-strike"),
   rbButton("code", "</>", "Code (Ctrl+E)", () => rich.commands.code(), "rb-btn rb-mono"),
   el("div", { class: "tb-sep" }),
-  rbButton("bullet_list", "Liste", "Liste a puces", () => rich.commands.bulletList()),
-  rbButton("ordered_list", "Numeros", "Liste numerotee", () => rich.commands.orderedList()),
-  rbButton("task", "Taches", "Liste de taches", () => rich.commands.taskList()),
-  rbButton("outdent", "Retrait −", "Diminuer le retrait", () => rich.commands.lift()),
+  rbButton("bullet_list", "Bullets", "Bulleted list", () => rich.commands.bulletList()),
+  rbButton("ordered_list", "Numbers", "Numbered list", () => rich.commands.orderedList()),
+  rbButton("task", "Tasks", "Task list", () => rich.commands.taskList()),
+  rbButton("outdent", "Outdent", "Decrease indentation", () => rich.commands.lift()),
   el("div", { class: "tb-sep" }),
-  rbButton("blockquote", "Citation", "Citation", () => rich.commands.blockquote()),
-  rbButton("hr", "Separateur", "Ligne de separation", () => rich.commands.horizontalRule()),
+  rbButton("blockquote", "Quote", "Block quote", () => rich.commands.blockquote()),
+  rbButton("hr", "Divider", "Horizontal rule", () => rich.commands.horizontalRule()),
   el("div", { class: "tb-sep" }),
-  rbButton("link", "Lien", "Inserer un lien (Ctrl+K)", () => rich.commands.link()),
-  rbButton("image", "Image", "Inserer une image", () => rich.commands.image()),
-  rbButton("table", "Tableau", "Inserer un tableau", () => rich.commands.table()),
+  rbButton("link", "Link", "Insert a link (Ctrl+K)", () => rich.commands.link()),
+  rbButton("image", "Image", "Insert an image", () => rich.commands.image()),
+  rbButton("table", "Table", "Insert a table", () => rich.commands.table()),
 );
 
-// Operations de tableau : n'apparaissent que lorsque le curseur y est, pour
-// eviter un ruban encombre de commandes inertes.
+// Table operations only appear when the cursor is inside a table, to avoid a
+// ribbon cluttered with inert commands.
 const tableTools = el("span", { class: "rb-group hidden" },
   el("div", { class: "tb-sep" }),
-  button("+Col", "Ajouter une colonne", () => rich.commands.addColumn(), "rb-btn"),
-  button("+Lig", "Ajouter une ligne", () => rich.commands.addRow(), "rb-btn"),
-  button("−Col", "Supprimer la colonne", () => rich.commands.deleteColumn(), "rb-btn"),
-  button("−Lig", "Supprimer la ligne", () => rich.commands.deleteRow(), "rb-btn"),
-  button("×", "Supprimer le tableau", () => rich.commands.deleteTable(), "rb-btn"),
+  button("+Col", "Add a column", () => rich.commands.addColumn(), "rb-btn"),
+  button("+Row", "Add a row", () => rich.commands.addRow(), "rb-btn"),
+  button("−Col", "Delete the column", () => rich.commands.deleteColumn(), "rb-btn"),
+  button("−Row", "Delete the row", () => rich.commands.deleteRow(), "rb-btn"),
+  button("×", "Delete the table", () => rich.commands.deleteTable(), "rb-btn"),
 );
 ribbon.append(tableTools);
 
-// --- panneaux ---------------------------------------------------------------
+// --- panes ------------------------------------------------------------------
 
 const editorHost = el("div", { class: "pane pane-editor" });
 const preview = el("article", { class: "md", id: "preview" });
@@ -313,7 +309,7 @@ const previewHost = el("section", { class: "pane pane-preview" }, preview, richH
 const divider = el("div", { class: "divider", role: "separator", "aria-orientation": "vertical" });
 const panes = el("main", { class: "panes" }, editorHost, divider, previewHost);
 
-// --- barre d'etat -----------------------------------------------------------
+// --- status bar -------------------------------------------------------------
 
 const sbName = el("b", { text: state.fileName });
 const sbDirty = el("span", { text: "" });
@@ -329,7 +325,7 @@ const statusbar = el("footer", { class: "sb" },
 app.append(toolbar, ribbon, panes, statusbar, fileInput);
 
 /* ===========================================================================
- * Panneau source (CodeMirror)
+ * Source pane (CodeMirror)
  * ======================================================================== */
 
 const view = new EditorView({
@@ -360,7 +356,7 @@ const view = new EditorView({
   }),
 });
 
-/** Texte du panneau source. Ne declenche aucune synchronisation. */
+/** Text of the source pane. Triggers no synchronisation. */
 function text() {
   return view.state.doc.toString();
 }
@@ -370,7 +366,7 @@ function initialDoc() {
     const draft = store.get(KEY.draft);
     if (draft !== null) {
       state.fileName = store.get(KEY.draftName) || state.fileName;
-      state.savedText = " "; // force l'etat « modifie » : le disque ne contient pas ce texte
+      state.savedText = " "; // force "modified": the disk does not hold this text
       return draft;
     }
   }
@@ -379,7 +375,7 @@ function initialDoc() {
 }
 
 /* ===========================================================================
- * Panneau rendu (ProseMirror)
+ * Preview pane (ProseMirror)
  * ======================================================================== */
 
 const rich = createRichEditor({
@@ -391,15 +387,15 @@ const rich = createRichEditor({
 /* ===========================================================================
  * Synchronisation
  *
- * Le texte de CodeMirror fait foi : c'est lui qu'on enregistre, qu'on exporte
- * et qu'on compare pour savoir si le document est modifie. L'editeur riche
- * s'aligne dessus, et lui renvoie ses propres modifications.
+ * The CodeMirror text is authoritative: it is what gets saved, exported, and
+ * compared to decide whether the document is modified. The rich editor aligns
+ * onto it, and pushes its own edits back.
  *
- * Deux precautions rendent l'ensemble stable :
- *   - le drapeau `syncing` empeche qu'une mise a jour provoquee par un panneau
- *     ne revienne le modifier en retour ;
- *   - le panneau qui a le focus est celui qui a raison. Sans cette regle, une
- *     source regeneree viendrait ecraser la frappe en cours.
+ * Two precautions keep this stable:
+ *   - the `syncing` flag stops an update caused by one pane from bouncing back
+ *     into it;
+ *   - the focused pane wins. Without that rule, a regenerated source would
+ *     overwrite whatever is being typed.
  * ======================================================================== */
 
 let syncing = false;
@@ -409,11 +405,11 @@ let renderTimer = 0;
 
 function onSourceChanged() {
   updateStatus();
-  if (syncing) return; // la modification vient de l'editeur riche
+  if (syncing) return; // the change came from the rich editor
 
   if (state.autosave) persistDraft(text());
   if (state.richMode) {
-    if (rich.hasFocus()) return; // l'utilisateur ecrit a droite : ne pas l'ecraser
+    if (rich.hasFocus()) return; // the user is typing on the right: leave it alone
     clearTimeout(toRichTimer);
     toRichTimer = setTimeout(pushToRich, 200);
   } else {
@@ -429,8 +425,8 @@ function onRichChanged() {
 function pushToRich() {
   if (!state.richMode || rich.hasFocus()) return;
 
-  // Remplacer le document reinitialise la selection et l'historique de
-  // l'editeur riche : autant s'en abstenir quand il contient deja ce texte.
+  // Replacing the document resets the rich editor's selection and history, so
+  // skip it when that editor already holds this text.
   const current = text();
   if (rich.getMarkdown() === current) return;
 
@@ -439,15 +435,14 @@ function pushToRich() {
   syncing = false;
 }
 
-// Le minuteur de synchronisation a pu etre arme alors que l'editeur riche
-// n'avait pas encore le focus. Sans cette annulation, il se declencherait juste
-// apres un clic dedans et emporterait la selection en cours.
+// The sync timer may have been armed while the rich editor was not yet
+// focused. Without this cancellation it would fire just after a click into it
+// and take the current selection with it.
 richHost.addEventListener("focusin", () => clearTimeout(toRichTimer));
 
 /**
- * Repercute immediatement les modifications de l'editeur riche dans la source.
- * Appelee avant tout ce qui lit le document : enregistrement, export, bascule
- * de mode, fermeture de l'onglet.
+ * Push pending rich-editor changes into the source immediately. Called before
+ * anything that reads the document: save, export, mode switch, tab close.
  */
 function flushRich() {
   clearTimeout(toSourceTimer);
@@ -464,14 +459,14 @@ function flushRich() {
   if (state.autosave) persistDraft(markdown);
 }
 
-/** Contenu canonique du document, editeur riche compris. */
+/** Canonical document content, rich editor included. */
 function documentText() {
   flushRich();
   return text();
 }
 
 /* ===========================================================================
- * Rendu et etat visuel
+ * Rendering and visual state
  * ======================================================================== */
 
 function scheduleRender() {
@@ -480,17 +475,17 @@ function scheduleRender() {
 }
 
 function render() {
-  if (state.richMode) return; // le panneau de lecture est masque
+  if (state.richMode) return; // the read-only pane is hidden
   preview.innerHTML = renderMarkdown(text());
 }
 
 function updateStatus() {
   const src = text();
   const words = (src.match(/\S+/g) || []).length;
-  sbCounts.textContent = `${words} mot${words > 1 ? "s" : ""} - ${src.length} car. - ${view.state.doc.lines} lignes`;
+  sbCounts.textContent = `${words} word${words === 1 ? "" : "s"} · ${src.length} chars · ${view.state.doc.lines} lines`;
 
   const dirty = src !== state.savedText;
-  sbDirty.textContent = dirty ? "- modifie" : "";
+  sbDirty.textContent = dirty ? "— modified" : "";
   sbDirty.className = dirty ? "dirty" : "";
   sbName.textContent = state.fileName;
 }
@@ -503,16 +498,16 @@ function flash(message, kind = "ok") {
   msgTimer = setTimeout(() => {
     sbMsg.textContent = "";
     sbMsg.className = "";
-  }, 4000);
+  }, 5000);
 }
 
 function persistDraft(src) {
   const ok = store.set(KEY.draft, src);
   store.set(KEY.draftName, state.fileName);
-  if (!ok) flash("Brouillon non enregistre (stockage indisponible ou plein)", "dirty");
+  if (!ok) flash("Draft not saved (storage unavailable or full)", "dirty");
 }
 
-/** Reflete dans le ruban l'etat du curseur de l'editeur riche. */
+/** Mirror the rich editor's cursor context in the ribbon. */
 function updateRibbon(status = rich.status()) {
   if (!state.richMode) return;
 
@@ -528,21 +523,21 @@ function updateRibbon(status = rich.status()) {
 }
 
 /* ===========================================================================
- * Modes d'affichage, theme, redimensionnement
+ * Layout, editing mode, theme, resizing
  * ======================================================================== */
 
-/** Le rendu est-il reellement a l'ecran ? En vue « Source » il est masque. */
+/** Is the preview actually on screen? In "Source" layout it is hidden. */
 function richPaneVisible() {
   return state.richMode && panes.dataset.view !== "editor";
 }
 
 /**
- * Aligne l'interface sur la disposition et le mode courants.
+ * Align the interface with the current layout and mode.
  *
- * Disposition et mode d'edition sont deux reglages independants, et aucun ne
- * modifie l'autre : quand le rendu n'est pas affiche, le bouton est simplement
- * desactive. Le detourner pour changer la disposition reviendrait a defaire un
- * choix explicite de l'utilisateur, sans le retablir ensuite.
+ * Layout and editing mode are two independent settings, and neither changes
+ * the other: when the preview is not on screen the toggle is simply disabled.
+ * Hijacking it to change the layout would undo an explicit user choice without
+ * ever restoring it.
  */
 function applyPaneMode() {
   const sourceOnly = panes.dataset.view === "editor";
@@ -550,8 +545,8 @@ function applyPaneMode() {
   btnRich.disabled = sourceOnly;
   btnRich.setAttribute("aria-pressed", String(state.richMode));
   btnRich.title = sourceOnly
-    ? "Affichez le rendu (Partage ou Rendu) pour pouvoir le modifier"
-    : "Ecrire directement dans le document rendu";
+    ? "Show the preview (Split or Preview) to edit it"
+    : "Write directly in the rendered document";
 
   const showRich = richPaneVisible();
   ribbon.classList.toggle("hidden", !showRich);
@@ -561,8 +556,8 @@ function applyPaneMode() {
 }
 
 function setView(mode) {
-  // Le rendu va disparaitre : ses modifications en attente doivent redescendre
-  // dans la source avant qu'il ne soit plus visible.
+  // The preview is about to disappear: its pending edits must reach the source
+  // before it stops being visible.
   if (mode === "editor" && state.richMode) flushRich();
 
   panes.dataset.view = mode;
@@ -570,7 +565,7 @@ function setView(mode) {
     b.setAttribute("aria-pressed", String(k === mode));
   }
   store.set(KEY.view, mode);
-  sbMode.textContent = { editor: "Source", split: "Vue partagee", preview: "Rendu" }[mode];
+  sbMode.textContent = { editor: "Source", split: "Split view", preview: "Preview" }[mode];
 
   applyPaneMode();
   if (mode !== "preview") view.requestMeasure();
@@ -584,7 +579,7 @@ function toggleRich() {
 function setRichMode(on) {
   if (on === state.richMode) return;
 
-  // Sortir du mode riche sans repercuter ses modifications les perdrait.
+  // Leaving rich mode without pushing its changes down would lose them.
   if (!on) flushRich();
 
   state.richMode = on;
@@ -603,8 +598,8 @@ function setRichMode(on) {
   }
 
   flash(on
-    ? "Modification du rendu active - la source sera regeneree"
-    : "Retour au rendu en lecture seule");
+    ? "Preview editing on — the source will be regenerated"
+    : "Back to read-only preview");
 }
 
 function setTheme(theme) {
@@ -616,7 +611,7 @@ function toggleTheme() {
   setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 }
 
-// Poignee de separation entre les deux panneaux.
+// Draggable split between the two panes.
 divider.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   divider.setPointerCapture(e.pointerId);
@@ -642,8 +637,7 @@ divider.addEventListener("pointerdown", (e) => {
   divider.addEventListener("pointerup", onUp);
 });
 
-// Defilement synchronise, proportionnel. Le drapeau evite la boucle de retour
-// entre les deux panneaux.
+// Proportional scroll sync. The flag prevents a feedback loop between panes.
 let scrollSyncing = false;
 function linkScroll(from, to) {
   from.addEventListener("scroll", () => {
@@ -662,16 +656,21 @@ linkScroll(view.scrollDOM, richHost);
 linkScroll(richHost, view.scrollDOM);
 
 /* ===========================================================================
- * Entrees / sorties fichier
+ * File input / output
  *
- * Chemin privilegie : File System Access API (Chrome/Edge), qui rend « Ctrl+S »
- * capable de reecrire le fichier d'origine. Repli universel : <input type=file>
- * a l'ouverture, telechargement d'un Blob a l'enregistrement.
+ * Preferred path: the File System Access API (Chrome/Edge), which lets Ctrl+S
+ * rewrite the original file. Universal fallback: <input type=file> to open, a
+ * Blob download to save.
+ *
+ * That API only exists in a *secure context*. Served over plain HTTP on an IP
+ * address it is absent entirely, so both Save and Save as fall back -- which is
+ * why the fallback has to stay genuinely usable rather than silently reusing
+ * the current name.
  * ======================================================================== */
 
 const hasFSA = typeof window.showOpenFilePicker === "function";
 const FILE_TYPES = [{
-  description: "Document Markdown",
+  description: "Markdown document",
   accept: { "text/markdown": [".md", ".markdown", ".mdown"], "text/plain": [".txt"] },
 }];
 
@@ -704,9 +703,9 @@ async function doOpen() {
     const file = await handle.getFile();
     state.fileHandle = handle;
     setDoc(await file.text(), file.name);
-    flash("Fichier ouvert");
+    flash("File opened");
   } catch (err) {
-    if (err.name !== "AbortError") flash("Ouverture impossible : " + err.message, "dirty");
+    if (err.name !== "AbortError") flash("Could not open: " + err.message, "dirty");
   }
 }
 
@@ -716,7 +715,7 @@ async function onFileInputChange() {
   state.fileHandle = null;
   setDoc(await file.text(), file.name);
   fileInput.value = "";
-  flash("Fichier charge");
+  flash("File loaded");
 }
 
 async function doSave() {
@@ -729,10 +728,10 @@ async function doSave() {
       await writable.close();
       state.savedText = content;
       updateStatus();
-      flash("Enregistre dans " + state.fileName);
+      flash("Saved to " + state.fileName);
       return;
     } catch (err) {
-      flash("Enregistrement impossible : " + err.message, "dirty");
+      flash("Could not save: " + err.message, "dirty");
       return;
     }
   }
@@ -755,30 +754,42 @@ async function doSaveAs() {
       state.fileName = handle.name;
       state.savedText = content;
       updateStatus();
-      flash("Enregistre dans " + state.fileName);
+      flash("Saved to " + state.fileName);
       return;
     } catch (err) {
-      if (err.name !== "AbortError") flash("Enregistrement impossible : " + err.message, "dirty");
+      if (err.name !== "AbortError") flash("Could not save: " + err.message, "dirty");
       return;
     }
   }
 
-  download(content, "text/markdown;charset=utf-8", state.fileName);
+  // No file picker available. Ask for a name anyway -- otherwise "Save as"
+  // would be indistinguishable from "Save", which is exactly how it felt.
+  const name = window.prompt("Save as — file name:", state.fileName);
+  if (name === null) return;
+
+  const trimmed = name.trim();
+  if (!trimmed) {
+    flash("Empty name: nothing saved", "dirty");
+    return;
+  }
+
+  state.fileName = trimmed;
+  download(content, "text/markdown;charset=utf-8", trimmed);
   state.savedText = content;
   updateStatus();
-  flash("Telechargement lance");
+  flash("Downloaded as " + trimmed);
 }
 
 async function doNew() {
   if (!(await confirmDiscard())) return;
   state.fileHandle = null;
-  state.fileName = "sans-titre.md";
+  state.fileName = "untitled.md";
   setDoc("", state.fileName);
   (state.richMode ? rich : view).focus();
 }
 
-// Le telechargement passe par un Blob local : aucune requete reseau, donc rien
-// que la CSP doive autoriser.
+// Downloads go through a local Blob: no network request, so nothing the CSP
+// needs to allow.
 function download(content, type, filename) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = el("a", { href: url, download: filename });
@@ -790,7 +801,7 @@ function download(content, type, filename) {
 
 async function confirmDiscard() {
   if (documentText() === state.savedText) return true;
-  return window.confirm("Le document contient des modifications non enregistrees. Continuer et les perdre ?");
+  return window.confirm("The document has unsaved changes. Continue and lose them?");
 }
 
 /* ===========================================================================
@@ -801,8 +812,8 @@ function baseName() {
   return state.fileName.replace(/\.(md|markdown|mdown|txt)$/i, "") || "document";
 }
 
-// Le HTML exporte embarque sa propre CSP verrouillee : le document produit ne
-// peut ni charger ni contacter quoi que ce soit, meme ouvert ailleurs.
+// The exported HTML carries its own locked-down CSP: the resulting document can
+// neither load nor contact anything, even opened elsewhere.
 function doExportHtml() {
   const title = baseName();
   const body = renderMarkdown(documentText());
@@ -810,7 +821,7 @@ function doExportHtml() {
   const theme = document.documentElement.dataset.theme || "light";
 
   const html = `<!doctype html>
-<html lang="fr" data-theme="${theme}">
+<html lang="en" data-theme="${theme}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -830,17 +841,17 @@ ${body}
 </html>
 `;
   download(html, "text/html;charset=utf-8", title + ".html");
-  flash("Rendu exporte");
+  flash("Rendered document exported");
 }
 
 /* ---------------------------------------------------------------------------
- * Telechargement de l'application elle-meme.
+ * Downloading the application itself.
  *
- * Le fichier est reconstruit a partir des noeuds d'origine du document -- le
- * <style> et le <script> sont des elements « raw text », donc leur textContent
- * restitue exactement les octets livres, execution du script comprise. Deux
- * consequences : le condensat SHA-256 de la CSP reste valide, et le contenu
- * tape par l'utilisateur ne peut pas se retrouver dans le fichier produit.
+ * The file is rebuilt from the document's original nodes -- <style> and
+ * <script> are raw-text elements, so their textContent returns exactly the
+ * bytes that were delivered, script execution included. Two consequences: the
+ * CSP's SHA-256 digest stays valid, and the user's typed content cannot end up
+ * in the produced file.
  * ------------------------------------------------------------------------ */
 function standaloneHtml() {
   const csp = document
@@ -850,13 +861,13 @@ function standaloneHtml() {
   const js = document.getElementById("app-js").textContent;
 
   return `<!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${csp.replace(/"/g, "&quot;")}">
 <meta name="referrer" content="no-referrer">
-<title>Editeur Markdown</title>
+<title>Markdown editor</title>
 <style id="app-css">${css}</style>
 </head>
 <body>
@@ -869,7 +880,7 @@ function standaloneHtml() {
 
 function doDownloadApp() {
   download(standaloneHtml(), "text/html;charset=utf-8", "md-editor.html");
-  flash("Application telechargee - ouvrez-la en file:// pour vous passer du serveur");
+  flash("Application downloaded — open it from file:// to drop the server entirely");
 }
 
 function escapeHtml(s) {
@@ -878,7 +889,7 @@ function escapeHtml(s) {
 }
 
 /* ===========================================================================
- * Brouillon local
+ * Local draft
  * ======================================================================== */
 
 function onAutosaveToggle() {
@@ -887,11 +898,11 @@ function onAutosaveToggle() {
 
   if (state.autosave) {
     persistDraft(documentText());
-    flash("Brouillon local actif - le contenu est ecrit en clair sur ce poste", "dirty");
+    flash("Local draft on — the content is written in clear text on this machine", "dirty");
   } else {
     store.del(KEY.draft);
     store.del(KEY.draftName);
-    flash("Brouillon local desactive et efface");
+    flash("Local draft turned off and erased");
   }
   refreshDraftUi();
 }
@@ -899,7 +910,7 @@ function onAutosaveToggle() {
 function doClearDraft() {
   store.del(KEY.draft);
   store.del(KEY.draftName);
-  flash("Brouillon efface");
+  flash("Draft erased");
   refreshDraftUi();
 }
 
@@ -908,58 +919,70 @@ function refreshDraftUi() {
 }
 
 /* ===========================================================================
- * A propos
+ * About dialog
  * ======================================================================== */
 
 function showAbout() {
   const close = () => sheet.remove();
   const box = el("div", { class: "sheet-box" });
+
+  const fileAccess = hasFSA
+    ? `<p>This browser exposes the File System Access API, so <b>Save</b> writes
+       straight back into the file you opened.</p>`
+    : `<p><b>Saving downloads a copy</b> instead of writing back to the original
+       file. ${window.isSecureContext
+         ? "This browser does not implement the File System Access API (Firefox and Safari do not)."
+         : "That API only exists in a <em>secure context</em>, and this page was served over plain HTTP on an IP address. Reach it over <code>https://</code>, or via <code>localhost</code>, to write files directly."}</p>`;
+
   box.innerHTML = `
-    <h2>Ou vont vos donnees ?</h2>
-    <p>Nulle part. Ce document n'effectue aucune requete reseau, et sa politique
-    de securite (<code>Content-Security-Policy</code>) demande au navigateur de
-    bloquer toute tentative :</p>
+    <h2>Where does your data go?</h2>
+    <p>Nowhere. This document makes no network request, and its
+    <code>Content-Security-Policy</code> tells the browser to block any
+    attempt:</p>
     <ul>
-      <li><code>default-src 'none'</code> &mdash; rien ne se charge par defaut</li>
-      <li><code>connect-src 'none'</code> &mdash; ni <code>fetch</code>, ni WebSocket, ni balise <code>&lt;a ping&gt;</code></li>
-      <li><code>img-src data: blob:</code> &mdash; les images distantes sont refusees, y compris celles referencees dans votre Markdown</li>
-      <li><code>script-src 'sha256-&hellip;'</code> &mdash; seul le script livre avec cette page peut s'executer</li>
+      <li><code>default-src 'none'</code> &mdash; nothing loads by default</li>
+      <li><code>connect-src 'none'</code> &mdash; no <code>fetch</code>, no WebSocket, no <code>&lt;a ping&gt;</code></li>
+      <li><code>img-src data: blob:</code> &mdash; remote images are refused, including those referenced in your Markdown</li>
+      <li><code>script-src 'sha256-&hellip;'</code> &mdash; only the script shipped with this page may run</li>
     </ul>
 
-    <h3>La limite a connaitre</h3>
-    <p>Un serveur compromis peut servir une <em>autre</em> page, avec une CSP
-    permissive. Les garanties ci-dessus ne valent que pour la page reellement
-    recue. Pour un document sensible, la seule parade solide est de ne plus
-    dependre du serveur :</p>
+    <h3>The limit worth knowing</h3>
+    <p>A compromised server can serve a <em>different</em> page, with a
+    permissive CSP. The guarantees above hold for the page you actually
+    received, not for the server. For a sensitive document, the only solid
+    answer is to stop depending on the server:</p>
     <ul>
-      <li>cliquez sur <b>Telecharger l'app</b> une fois ;</li>
-      <li>ouvrez le fichier <code>md-editor.html</code> obtenu en <code>file://</code> ;</li>
-      <li>comparez son condensat SHA-256 a celui publie pour la version utilisee.</li>
+      <li>click <b>Download app</b> once;</li>
+      <li>open the resulting <code>md-editor.html</code> from <code>file://</code>;</li>
+      <li>compare its SHA-256 digest with the one published for that version.</li>
     </ul>
 
-    <h3>Les deux modes d'edition</h3>
-    <p>Le bouton <b>Modifier le rendu</b> rend le document affiche a droite
-    directement modifiable, avec un ruban de mise en forme. Le texte source est alors
-    <em>regenere</em> a partir du document : la mise en forme est preservee,
-    mais vos conventions d'ecriture sont normalisees (<code>*</code> devient
-    <code>-</code>, les titres soulignes deviennent des <code>#</code>). Tant
-    que vous n'activez pas ce mode, la source reste intacte au caractere pres.</p>
-    <p>Le HTML brut place dans le Markdown est conserve tel quel, mais n'est pas
-    modifiable dans le rendu : editez-le dans le panneau source.</p>
+    <h3>The two editing modes</h3>
+    <p><b>Edit preview</b> makes the rendered document on the right directly
+    editable, with a formatting ribbon. The source text is then
+    <em>regenerated</em> from the document: the formatting is preserved, but
+    your writing conventions are normalised (<code>*</code> becomes
+    <code>-</code>, underlined headings become <code>#</code>). As long as you
+    leave that mode off, the source stays byte-for-byte intact.</p>
+    <p>Raw HTML inside the Markdown is kept verbatim, but is not editable in the
+    preview: edit it in the source pane.</p>
 
-    <h3>Stockage</h3>
-    <p>Par defaut, <b>rien</b> n'est conserve : ni brouillon, ni historique. La
-    case <b>Brouillon local</b> ecrit le document en clair dans le
-    <code>localStorage</code> de ce navigateur &mdash; pratique sur un poste
-    personnel, a eviter sur une machine partagee.</p>
+    <h3>Files</h3>
+    ${fileAccess}
 
-    <h3>Raccourcis</h3>
+    <h3>Storage</h3>
+    <p>By default <b>nothing</b> is kept: no draft, no history. The <b>Local
+    draft</b> checkbox writes the document in clear text into this browser's
+    <code>localStorage</code> &mdash; handy on a personal machine, best avoided
+    on a shared one.</p>
+
+    <h3>Shortcuts</h3>
     <ul>
-      <li><code>Ctrl</code>+<code>O</code> ouvrir &mdash; <code>Ctrl</code>+<code>S</code> enregistrer &mdash; <code>Ctrl</code>+<code>Maj</code>+<code>S</code> enregistrer sous</li>
-      <li>Dans le rendu : <code>Ctrl</code>+<code>B</code> gras, <code>Ctrl</code>+<code>I</code> italique, <code>Ctrl</code>+<code>K</code> lien, <code>Tab</code> cellule suivante</li>
+      <li><code>Ctrl</code>+<code>O</code> open &mdash; <code>Ctrl</code>+<code>S</code> save &mdash; <code>Ctrl</code>+<code>Shift</code>+<code>S</code> save as</li>
+      <li>In the preview: <code>Ctrl</code>+<code>B</code> bold, <code>Ctrl</code>+<code>I</code> italic, <code>Ctrl</code>+<code>K</code> link, <code>Tab</code> next cell</li>
     </ul>
   `;
-  const ok = button("Fermer", "Fermer", close);
+  const ok = button("Close", "Close", close);
   box.append(el("div", { class: "sheet-actions" }, ok));
 
   const sheet = el("div", {
@@ -975,7 +998,7 @@ function showAbout() {
 }
 
 /* ===========================================================================
- * Raccourcis globaux et garde-fou de fermeture
+ * Global shortcuts and close guard
  * ======================================================================== */
 
 window.addEventListener("keydown", (e) => {
@@ -999,7 +1022,7 @@ window.addEventListener("beforeunload", (e) => {
 });
 
 /* ===========================================================================
- * Demarrage
+ * Start-up
  * ======================================================================== */
 
 setTheme(
@@ -1014,11 +1037,16 @@ if (savedSplit) panes.style.setProperty("--split", savedSplit);
 refreshDraftUi();
 updateStatus();
 
-// `setView` a deja applique la disposition, le mode et, le cas echeant, pousse
-// le document vers l'editeur riche.
+// `setView` has already applied the layout, the mode and, where relevant,
+// pushed the document into the rich editor.
 render();
 if (richPaneVisible()) rich.focus(); else view.focus();
 
+// Worth saying explicitly rather than letting the user discover that "Save"
+// only ever downloads: the cause is almost always the insecure origin.
 if (!hasFSA) {
-  flash("Ce navigateur n'a pas l'API fichier : l'enregistrement passe par un telechargement");
+  flash(window.isSecureContext
+    ? "This browser has no file API: saving downloads a copy"
+    : "Insecure origin: saving downloads a copy. Use https:// or localhost to write files directly",
+    "dirty");
 }

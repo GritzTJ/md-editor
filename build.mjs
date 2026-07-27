@@ -1,18 +1,18 @@
 /* ---------------------------------------------------------------------------
- * Construction de md-editor.
+ * Building md-editor.
  *
- * La sortie est un fichier unique, `dist/index.html`, qui contient tout : CSS,
- * JavaScript, dependances. Aucune ressource externe n'est referencee, donc la
- * page fonctionne a l'identique servie en HTTP ou ouverte en `file://` apres
- * simple copie -- c'est ce qui permet a l'utilisateur de se passer du serveur.
+ * The output is a single file, `dist/index.html`, holding everything: CSS,
+ * JavaScript, dependencies. No external resource is referenced, so the page
+ * behaves identically served over HTTP or opened from `file://` after a plain
+ * copy -- which is what lets a user drop the server entirely.
  *
- * Le script inline est autorise par la CSP via son condensat SHA-256, calcule
- * ici sur les octets exacts qui seront ecrits dans la page. Un seul octet
- * modifie apres coup et le navigateur refuse d'executer le script.
+ * The inline script is allowed by the CSP through its SHA-256 digest, computed
+ * here over the exact bytes that will be written into the page. Change one byte
+ * afterwards and the browser refuses to run it.
  *
- *   node build.mjs           construit dist/
- *   node build.mjs --serve   construit puis sert dist/ sur :8080 avec les
- *                            memes en-tetes que le conteneur de production
+ *   node build.mjs           build dist/
+ *   node build.mjs --serve   build, then serve dist/ on :8080 with the same
+ *                            headers as the production container
  * ------------------------------------------------------------------------- */
 
 import * as esbuild from "esbuild";
@@ -26,7 +26,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, "dist");
 const serve = process.argv.includes("--serve");
 
-/* --- 1. Bundle JavaScript ------------------------------------------------ */
+/* --- 1. JavaScript bundle ------------------------------------------------ */
 
 const bundle = await esbuild.build({
   entryPoints: [resolve(root, "src/app.js")],
@@ -35,26 +35,24 @@ const bundle = await esbuild.build({
   format: "iife",
   target: ["es2021"],
   charset: "utf8",
-  legalComments: "eof", // les licences MIT des dependances restent dans le fichier
+  legalComments: "eof", // dependency MIT licences stay in the file
   write: false,
   logLevel: "info",
 });
 
-// `</script` ne peut apparaitre dans du JavaScript valide qu'a l'interieur
-// d'une chaine, d'une expression reguliere ou d'un commentaire : l'echapper
-// est donc toujours sans effet sur la semantique, et evite que le parseur HTML
-// referme la balise au milieu du bundle.
+// `</script` can only appear in valid JavaScript inside a string, a regular
+// expression or a comment, so escaping it never changes the semantics -- and it
+// stops the HTML parser from closing the tag in the middle of the bundle.
 const js = bundle.outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
 const css = await readFile(resolve(root, "src/styles.css"), "utf8");
 
-/* --- 2. Politique de securite ------------------------------------------- */
+/* --- 2. Content Security Policy ------------------------------------------ */
 
 const scriptHash = createHash("sha256").update(js, "utf8").digest("base64");
 
-// `frame-ancestors` est ignore dans une balise <meta> : la directive n'a d'effet
-// que via l'en-tete HTTP, d'ou la generation de csp.conf pour nginx. Le reste
-// est duplique dans le document pour que la protection voyage avec le fichier
-// telecharge.
+// `frame-ancestors` is ignored inside a <meta> tag: it only takes effect as an
+// HTTP header, hence the generated csp.conf for nginx. The rest is duplicated
+// in the document so the protection travels with the downloaded file.
 const CSP_DIRECTIVES = [
   "default-src 'none'",
   `script-src 'sha256-${scriptHash}'`,
@@ -68,28 +66,29 @@ const CSP_DIRECTIVES = [
 
 const cspMeta = CSP_DIRECTIVES.join("; ");
 
-// Pas de directive `sandbox` ici : elle n'apporterait presque rien face a
-// `default-src 'none'` et casserait l'API File System Access, sur laquelle
-// repose l'enregistrement direct des fichiers.
+// No `sandbox` directive here: it would add almost nothing on top of
+// `default-src 'none'` and would break the File System Access API, which direct
+// file saving relies on.
 const cspHeader = [...CSP_DIRECTIVES, "frame-ancestors 'none'"].join("; ");
 
-/* --- 3. Document final --------------------------------------------------- */
+/* --- 3. Final document --------------------------------------------------- */
 
-// Le <body> ne contient qu'un conteneur vide : toute l'interface est batie par
-// le script. C'est ce qui rend la reconstitution du fichier autonome depuis le
-// DOM fidele a l'original, sans risque d'y embarquer le document de l'utilisateur.
-// `data-theme` est volontairement absent : la feuille de style choisit alors
-// selon `prefers-color-scheme`, et le script pose l'attribut des son execution.
+// `data-theme` is deliberately absent: the stylesheet then follows
+// `prefers-color-scheme`, and the script sets the attribute as soon as it runs.
+//
+// The <body> holds nothing but an empty container: the whole interface is built
+// by the script. That is what makes rebuilding the standalone file from the DOM
+// faithful to the original, with no risk of embedding the user's document.
 const html = `<!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${cspMeta}">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="Editeur Markdown fonctionnant entierement dans le navigateur.">
-<title>Editeur Markdown</title>
+<meta name="description" content="A Markdown editor that runs entirely in the browser.">
+<title>Markdown editor</title>
 <style id="app-css">${css}</style>
 </head>
 <body>
@@ -103,26 +102,26 @@ await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await writeFile(resolve(dist, "index.html"), html, "utf8");
 
-// Fragment inclus par nginx : garde l'en-tete et le document parfaitement
-// synchronises, y compris le condensat du script.
+// Fragment included by nginx: keeps the header and the document perfectly in
+// step, script digest included.
 await writeFile(
   resolve(dist, "csp.conf"),
-  `# Genere par build.mjs -- ne pas editer a la main.\n` +
+  `# Generated by build.mjs -- do not edit by hand.\n` +
   `add_header Content-Security-Policy "${cspHeader}" always;\n`,
   "utf8",
 );
 
-// Condensat du fichier livre : c'est la valeur a publier avec chaque release
-// pour qu'un utilisateur puisse verifier la page qu'on lui a servie.
+// Digest of the delivered file: the value to publish with each release so a
+// user can verify the page they were actually served.
 const fileHash = createHash("sha256").update(html, "utf8").digest("hex");
 await writeFile(resolve(dist, "index.html.sha256"), `${fileHash}  index.html\n`, "utf8");
 
-const kb = (n) => (n / 1024).toFixed(1) + " Ko";
+const kb = (n) => (n / 1024).toFixed(1) + " kB";
 console.log(`\n  dist/index.html   ${kb(Buffer.byteLength(html))}  (js ${kb(Buffer.byteLength(js))}, css ${kb(Buffer.byteLength(css))})`);
 console.log(`  sha256            ${fileHash}`);
 console.log(`  script-src        'sha256-${scriptHash}'\n`);
 
-/* --- 4. Serveur de developpement ---------------------------------------- */
+/* --- 4. Development server ----------------------------------------------- */
 
 if (serve) {
   const port = Number(process.env.PORT || 8080);
@@ -146,6 +145,6 @@ if (serve) {
     });
     res.end(req.method === "HEAD" ? undefined : body);
   }).listen(port, () => {
-    console.log(`  Serveur de developpement : http://localhost:${port}\n`);
+    console.log(`  Development server: http://localhost:${port}\n`);
   });
 }

@@ -1,18 +1,19 @@
 /* ---------------------------------------------------------------------------
- * Moteur Markdown partage.
+ * Shared Markdown engine.
  *
- * Un seul analyseur (markdown-it) sert a la fois l'apercu en lecture et
- * l'editeur riche : ce qui s'affiche et ce qui s'edite viennent donc du meme
- * arbre, et ne peuvent pas diverger.
+ * A single parser (markdown-it) serves both the read-only preview and the rich
+ * editor: what is displayed and what is edited come from the same tree, so they
+ * cannot drift apart.
  *
- * L'enjeu de ce fichier est l'aller-retour. Editer en mode riche regenere la
- * source depuis le modele ProseMirror ; tout ce que le schema ne sait pas
- * representer serait donc perdu silencieusement. D'ou trois ajouts au schema
- * de base de prosemirror-markdown, qui ne couvre que CommonMark :
+ * The hard part here is the round trip. Editing in rich mode regenerates the
+ * source from the model, so anything the schema cannot represent would be lost
+ * silently. Hence three additions to prosemirror-markdown's base schema, which
+ * only covers CommonMark:
  *
- *   - tableaux, cases a cocher et barre (ce que l'apercu affichait deja) ;
- *   - html_block / html_inline, qui conservent le HTML brut tel quel plutot
- *     que de le laisser disparaitre au premier aller-retour.
+ *   - tables, task checkboxes and strikethrough (what the preview already
+ *     displayed);
+ *   - html_block / html_inline, which keep raw HTML verbatim rather than
+ *     letting it vanish on the first round trip.
  * ------------------------------------------------------------------------- */
 
 import MarkdownIt from "markdown-it";
@@ -27,17 +28,17 @@ import { tableNodes } from "prosemirror-tables";
 import DOMPurify from "dompurify";
 
 /* ===========================================================================
- * 1. Analyseur markdown-it
+ * 1. markdown-it parser
  * ======================================================================== */
 
 /**
- * Reconnait les cases a cocher GFM (`- [ ]` / `- [x]`).
+ * Recognise GFM task checkboxes (`- [ ]` / `- [x]`).
  *
- * markdown-it ne les gere pas d'origine. Plutot que d'injecter du HTML dans
- * le flux de jetons -- ce qui obligerait ensuite a le re-analyser pour
- * l'editeur riche -- on marque le jeton `list_item_open` d'un attribut et on
- * retire le marqueur du texte. L'apercu et ProseMirror lisent alors la meme
- * information a la source.
+ * markdown-it does not handle them out of the box. Rather than injecting HTML
+ * into the token stream -- which would then have to be re-parsed for the rich
+ * editor -- we tag the `list_item_open` token with an attribute and strip the
+ * marker from the text. Preview and ProseMirror then read the same fact from
+ * the same place.
  */
 function taskListPlugin(md) {
   const MARKER = /^\[([ xX])\]\s+/;
@@ -58,8 +59,8 @@ function taskListPlugin(md) {
       tokens[i].attrSet("data-checked", match[1] === " " ? "false" : "true");
       inline.content = inline.content.slice(match[0].length);
 
-      // Le contenu est deja decoupe en jetons enfants : retirer le marqueur du
-      // seul `inline.content` ne suffirait pas au rendu.
+      // The content is already split into child tokens: stripping the marker
+      // from `inline.content` alone would not affect rendering.
       const first = inline.children && inline.children[0];
       if (first && first.type === "text") {
         first.content = first.content.replace(MARKER, "");
@@ -68,10 +69,10 @@ function taskListPlugin(md) {
     return true;
   });
 
-  // La case est dessinee en CSS plutot qu'avec un <input> : cela evite
-  // d'autoriser une balise de formulaire dans l'assainissement. Le marqueur
-  // <span> est emis ici pour que l'apercu et l'editeur riche partagent
-  // exactement la meme structure, et donc les memes regles de style.
+  // The box is drawn in CSS rather than with an <input>, which avoids having to
+  // allow a form tag through sanitisation. The <span> marker is emitted here so
+  // that preview and rich editor share exactly the same structure, and
+  // therefore the same style rules.
   md.renderer.rules.list_item_open = (tokens, idx, options, env, self) => {
     const checked = tokens[idx].attrGet("data-checked");
     if (checked === null) return self.renderToken(tokens, idx, options);
@@ -81,9 +82,9 @@ function taskListPlugin(md) {
   };
 }
 
-// `html: true` conserve le comportement d'origine : le HTML brut ecrit dans le
-// Markdown est interprete, puis assaini par DOMPurify. Le desactiver
-// simplifierait la vie mais casserait les documents existants.
+// `html: true` preserves the original behaviour: raw HTML written in the
+// Markdown is interpreted, then sanitised by DOMPurify. Turning it off would
+// simplify life but break existing documents.
 export const md = MarkdownIt("default", {
   html: true,
   linkify: false,
@@ -92,11 +93,11 @@ export const md = MarkdownIt("default", {
 }).use(taskListPlugin);
 
 /* ===========================================================================
- * 2. Rendu HTML pour l'apercu en lecture
+ * 2. HTML rendering for the read-only preview
  * ======================================================================== */
 
-// Les liens du document s'ouvrent dans un nouvel onglet sans referrer : le site
-// cible ne doit rien apprendre du document en cours d'edition.
+// Links open in a new tab with no referrer: the target site must learn nothing
+// about the document being edited.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A" && node.hasAttribute("href")) {
     node.setAttribute("target", "_blank");
@@ -105,12 +106,11 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 });
 
 const PURIFY_CONFIG = {
-  // <style> injecterait des regles dans toute la page, et un formulaire donne
-  // l'illusion d'une saisie legitime : ni l'un ni l'autre n'a sa place dans un
-  // apercu de document.
+  // <style> would inject rules into the whole page, and a form gives the
+  // illusion of a legitimate input: neither belongs in a document preview.
   FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select"],
   FORBID_ATTR: ["srcset", "ping", "formaction"],
-  ALLOW_DATA_ATTR: true, // requis par data-checked sur les cases a cocher
+  ALLOW_DATA_ATTR: true, // required by data-checked on task items
 };
 
 export function renderMarkdown(src) {
@@ -119,18 +119,18 @@ export function renderMarkdown(src) {
     html = md.render(src);
   } catch (err) {
     const p = document.createElement("p");
-    p.textContent = "Erreur d'analyse Markdown : " + err.message;
+    p.textContent = "Markdown parse error: " + err.message;
     return p.outerHTML;
   }
   return DOMPurify.sanitize(html, PURIFY_CONFIG);
 }
 
 /* ===========================================================================
- * 3. Schema ProseMirror
+ * 3. ProseMirror schema
  * ======================================================================== */
 
-// Les cellules contiennent de l'inline et non des blocs : une cellule GFM ne
-// peut de toute facon pas accueillir de paragraphes multiples.
+// Cells hold inline content, not blocks: a GFM cell cannot contain multiple
+// paragraphs anyway.
 const tables = tableNodes({
   tableGroup: "block",
   cellContent: "inline*",
@@ -145,9 +145,9 @@ const tables = tableNodes({
   },
 });
 
-// `checked` vaut null pour une puce ordinaire, false ou true pour une tache.
-// Le corps est enveloppe pour que la case dessinee reste hors du flux
-// editable, sans quoi le curseur pourrait s'y placer.
+// `checked` is null for a plain bullet, false or true for a task. The body is
+// wrapped so the drawn checkbox stays outside the editable flow, where the
+// cursor could otherwise land.
 const listItem = {
   content: "block+",
   defining: true,
@@ -169,10 +169,9 @@ const listItem = {
   },
 };
 
-// Le HTML brut est conserve mot pour mot dans un noeud atomique. Il n'est pas
-// modifiable en mode riche -- le rendre editable reviendrait a reconstruire un
-// editeur HTML -- mais il traverse l'aller-retour intact, ce qui est le point
-// important.
+// Raw HTML is kept word for word inside an atomic node. It is not editable in
+// rich mode -- making it editable would mean building an HTML editor -- but it
+// survives the round trip intact, which is the point.
 const htmlBlock = {
   group: "block",
   atom: true,
@@ -180,7 +179,7 @@ const htmlBlock = {
   attrs: { content: { default: "" } },
   toDOM: (node) => ["pre", {
     class: "raw-html",
-    title: "HTML brut : conserve tel quel, non modifiable ici",
+    title: "Raw HTML: kept verbatim, not editable here",
   }, node.attrs.content],
   parseDOM: [{ tag: "pre.raw-html", getAttrs: (dom) => ({ content: dom.textContent }) }],
 };
@@ -193,7 +192,7 @@ const htmlInline = {
   attrs: { content: { default: "" } },
   toDOM: (node) => ["span", {
     class: "raw-html-inline",
-    title: "HTML brut : conserve tel quel, non modifiable ici",
+    title: "Raw HTML: kept verbatim, not editable here",
   }, node.attrs.content],
   parseDOM: [{ tag: "span.raw-html-inline", getAttrs: (dom) => ({ content: dom.textContent }) }],
 };
@@ -268,8 +267,8 @@ export const parser = new MarkdownParser(schema, md, {
   },
   code_inline: { mark: "code", noCloseToken: true },
 
-  // markdown-it enveloppe les lignes dans thead/tbody, que le schema de
-  // ProseMirror ne connait pas : la table y contient directement ses lignes.
+  // markdown-it wraps rows in thead/tbody, which ProseMirror's schema knows
+  // nothing about: there, a table holds its rows directly.
   table: { block: "table" },
   thead: { ignore: true },
   tbody: { ignore: true },
@@ -286,15 +285,15 @@ export const parser = new MarkdownParser(schema, md, {
  * ======================================================================== */
 
 /**
- * Serialise le contenu inline d'une cellule.
+ * Serialise a cell's inline content.
  *
- * Le serialiseur n'expose pas de rendu isole : on ecrit donc dans son tampon
- * puis on le rembobine. Les barres verticales sont echappees et les retours a
- * la ligne aplatis, faute de quoi la cellule romprait la table GFM.
+ * The serialiser exposes no isolated render, so we write into its buffer and
+ * rewind. Pipes are escaped and newlines flattened, without which the cell
+ * would break the GFM table.
  *
- * Le delimiteur courant est neutralise pendant l'operation : a l'interieur
- * d'une citation ou d'une liste il serait sinon recopie au debut de chaque
- * cellule, le serialiseur croyant commencer une ligne.
+ * The current delimiter is neutralised for the duration: inside a block quote
+ * or a list it would otherwise be copied to the start of every cell, the
+ * serialiser believing it is starting a line.
  */
 function cellMarkdown(state, cell) {
   const delim = state.delim;
@@ -312,10 +311,10 @@ function cellMarkdown(state, cell) {
 const ALIGN_RULE = { left: ":---", center: ":---:", right: "---:", null: "---" };
 
 function serializeTable(state, node) {
-  // La separation d'avec le bloc precedent doit etre ecrite maintenant : elle
-  // serait sinon emise pendant le rendu des cellules, puis effacee par le
-  // rembobinage de `cellMarkdown` -- et le tableau viendrait se coller au
-  // paragraphe ou a la liste qui le precede.
+  // The separation from the previous block has to be written now: it would
+  // otherwise be emitted while rendering the cells, then wiped by
+  // `cellMarkdown`'s rewind -- and the table would end up glued to the
+  // paragraph or list before it.
   state.flushClose();
 
   const rows = [];
@@ -326,8 +325,8 @@ function serializeTable(state, node) {
   });
   if (!rows.length) return;
 
-  // GFM impose une ligne d'en-tete : si le tableau n'en a pas, on en emet une
-  // vide plutot que de produire une table que personne ne saura relire.
+  // GFM requires a header row: if the table has none, emit an empty one rather
+  // than produce a table nobody can read back.
   const firstRow = node.firstChild;
   const hasHeader = firstRow.firstChild &&
     firstRow.firstChild.type === schema.nodes.table_header;
@@ -350,7 +349,7 @@ function serializeTable(state, node) {
   state.closeBlock(node);
 }
 
-/** Prefixe d'un element de liste, case a cocher comprise. */
+/** Prefix of a list item, checkbox included. */
 function itemPrefix(node, i, bullet) {
   const checked = node.child(i).attrs.checked;
   if (checked === null) return bullet;
@@ -378,8 +377,8 @@ export const serializer = new MarkdownSerializer(
     },
 
     table: serializeTable,
-    // Les lignes et cellules sont entierement prises en charge par
-    // serializeTable ; les atteindre isolement signalerait un bug.
+    // Rows and cells are handled entirely by serializeTable; reaching them on
+    // their own would signal a bug.
     table_row: () => {},
     table_cell: () => {},
     table_header: () => {},
@@ -404,12 +403,12 @@ export const serializer = new MarkdownSerializer(
   },
 );
 
-/** Markdown -> document ProseMirror. */
+/** Markdown -> ProseMirror document. */
 export function toDoc(markdown) {
   return parser.parse(markdown);
 }
 
-/** Document ProseMirror -> Markdown. */
+/** ProseMirror document -> Markdown. */
 export function toMarkdown(doc) {
   return serializer.serialize(doc, { tightLists: true });
 }

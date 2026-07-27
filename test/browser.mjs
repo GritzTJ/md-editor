@@ -1,23 +1,23 @@
 /* ---------------------------------------------------------------------------
- * Tests de bout en bout dans un vrai navigateur.
+ * End-to-end tests in a real browser.
  *
- * Ils portent sur le fichier construit, servi comme en production. L'essentiel
- * n'est pas de verifier que les boutons repondent, mais que la promesse du
- * projet tient : le navigateur doit refuser toute sortie reseau, l'apercu doit
- * neutraliser le HTML hostile, et le fichier autonome doit demarrer seul sans
- * emporter le document de l'utilisateur.
+ * They run against the built file, served the way production serves it. The
+ * point is not that buttons respond, but that the project's promise holds: the
+ * browser must refuse every network egress, the preview must neutralise hostile
+ * HTML, and the standalone file must start on its own without carrying the
+ * user's document with it.
  *
- * puppeteer n'est volontairement pas une dependance du projet : il telecharge
- * un Chrome complet, ce qui alourdirait `npm install` et la construction de
- * l'image pour tout le monde.
+ * puppeteer is deliberately not a project dependency: it downloads a full
+ * Chrome, which would weigh down `npm install` and the image build for
+ * everyone.
  *
- *   npm run dev &                      # ou : docker run -p 8080:8080 md-editor
+ *   npm run dev &                      # or: docker run -p 8080:8080 md-editor
  *   npm install --no-save puppeteer
  *   node test/browser.mjs
  *
- * Variables d'environnement :
- *   TARGET                        URL a tester (defaut http://localhost:8080/)
- *   PUPPETEER_EXECUTABLE_PATH     navigateur a utiliser
+ * Environment variables:
+ *   TARGET                        URL under test (default http://localhost:8080/)
+ *   PUPPETEER_EXECUTABLE_PATH     browser to use
  * ------------------------------------------------------------------------- */
 
 import puppeteer from "puppeteer";
@@ -43,6 +43,14 @@ const browser = await puppeteer.launch({
   args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
 
+// Browser advisories that say nothing about the application. Served over plain
+// HTTP on an IP address, Chrome reports that it ignored Cross-Origin-Opener-
+// Policy because the origin is not trustworthy -- which is the documented
+// consequence of an insecure origin, not a fault in the page.
+const BENIGN_CONSOLE = [
+  /Cross-Origin-Opener-Policy header has been ignored/i,
+];
+
 async function newPage() {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
@@ -50,7 +58,7 @@ async function newPage() {
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
     const t = m.text();
-    if (m.type() === "error") errors.push(t);
+    if (m.type() === "error" && !BENIGN_CONSOLE.some((re) => re.test(t))) errors.push(t);
     if (/Content Security Policy/i.test(t)) csp.push(t);
   });
   return { page, errors, csp };
@@ -59,12 +67,12 @@ async function newPage() {
 const { page, errors, csp } = await newPage();
 const cdp = await page.createCDPSession();
 
-/** Selectionne un bouton par son libelle exact. */
+/** Pick a button by its exact label. */
 const btn = async (label) => {
   for (const e of await page.$$("button")) {
     if ((await e.evaluate((n) => n.textContent)) === label) return e;
   }
-  throw new Error(`bouton introuvable : ${label}`);
+  throw new Error(`button not found: ${label}`);
 };
 
 async function clearSource() {
@@ -75,7 +83,7 @@ async function clearSource() {
   await page.keyboard.press("Backspace");
 }
 
-/** Remplace le contenu du panneau source en simulant une frappe reelle. */
+/** Replace the source pane content by simulating real typing. */
 async function retype(content) {
   await clearSource();
   await page.type(".cm-content", content);
@@ -83,12 +91,12 @@ async function retype(content) {
 }
 
 /**
- * Pose un contenu d'un bloc, comme un collage.
+ * Drop content in as a single block, like a paste.
  *
- * A utiliser des que la source contient du HTML : lang-markdown delegue les
- * blocs HTML au parseur de @codemirror/lang-html, dont `autoCloseTags` ajoute
- * la balise fermante quand on tape « > ». Frappe caractere par caractere, un
- * fragment deja complet ressortirait donc avec une fermeture en trop.
+ * Use this whenever the source contains HTML: lang-markdown delegates HTML
+ * blocks to @codemirror/lang-html, whose `autoCloseTags` adds the closing tag
+ * when "&gt;" is typed. Typed character by character, an already complete
+ * fragment would come out with one closing tag too many.
  */
 async function pasteSource(content) {
   await clearSource();
@@ -96,71 +104,71 @@ async function pasteSource(content) {
   await wait(500);
 }
 
-/* ========================= 1. chargement ========================= */
-console.log("\n--- chargement et amorcage ---");
+/* ========================= 1. loading ========================= */
+console.log("\n--- loading and start-up ---");
 await page.goto(TARGET, { waitUntil: "networkidle0" });
 await wait(600);
 
-ok("aucune erreur JavaScript au demarrage", errors.length === 0, errors.slice(0, 3).join(" | "));
-ok("aucune violation CSP au demarrage", csp.length === 0, csp.slice(0, 3).join(" | "));
-ok("la barre d'outils est rendue", (await page.$(".tb")) !== null);
-ok("CodeMirror est monte", (await page.$(".cm-editor .cm-content")) !== null);
-ok("l'apercu rend le document d'exemple",
-  (await page.$eval("#preview h1", (e) => e.textContent).catch(() => null)) === "Editeur Markdown local");
-ok("les tableaux GFM sont rendus", (await page.$$eval("#preview table th", (e) => e.length)) === 2);
+ok("no JavaScript error at start-up", errors.length === 0, errors.slice(0, 3).join(" | "));
+ok("no CSP violation at start-up", csp.length === 0, csp.slice(0, 3).join(" | "));
+ok("the toolbar is rendered", (await page.$(".tb")) !== null);
+ok("CodeMirror is mounted", (await page.$(".cm-editor .cm-content")) !== null);
+ok("the preview renders the sample document",
+  (await page.$eval("#preview h1", (e) => e.textContent).catch(() => null)) === "Local Markdown editor");
+ok("GFM tables are rendered", (await page.$$eval("#preview table th", (e) => e.length)) === 2);
 
-/* ========================= 2. edition ========================= */
-console.log("\n--- edition et rendu ---");
-// markdown() installe markdownKeymap, qui prolonge automatiquement les listes :
-// apres « - alpha » + Entree le tiret suivant est deja la. On tape donc comme
-// un humain, sans repeter le marqueur.
-await retype("# Bonjour\n\nUn **essai** avec `du code`.\n\n- alpha\nbeta");
+/* ========================= 2. editing ========================= */
+console.log("\n--- editing and rendering ---");
+// markdown() installs markdownKeymap, which continues lists automatically:
+// after "- alpha" plus Enter the next dash is already there. So type the way a
+// human would, without repeating the marker.
+await retype("# Hello\n\nA **test** with `some code`.\n\n- alpha\nbeta");
 
 const lines = await page.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent));
-ok("la continuation automatique des listes fonctionne",
+ok("automatic list continuation works",
   lines.at(-1) === "- beta", JSON.stringify(lines.slice(-2)));
-ok("le titre saisi apparait dans l'apercu",
-  (await page.$eval("#preview h1", (e) => e.textContent)) === "Bonjour");
-ok("le gras est rendu", (await page.$$eval("#preview strong", (e) => e.length)) === 1);
-ok("le code inline est rendu", (await page.$$eval("#preview code", (e) => e.length)) === 1);
-ok("la liste est rendue", (await page.$$eval("#preview li", (e) => e.length)) === 2);
+ok("the typed heading appears in the preview",
+  (await page.$eval("#preview h1", (e) => e.textContent)) === "Hello");
+ok("bold is rendered", (await page.$$eval("#preview strong", (e) => e.length)) === 1);
+ok("inline code is rendered", (await page.$$eval("#preview code", (e) => e.length)) === 1);
+ok("the list is rendered", (await page.$$eval("#preview li", (e) => e.length)) === 2);
 
 const sb = await page.$eval(".sb", (e) => e.textContent);
-ok("la barre d'etat compte les mots", /\d+ mots/.test(sb), sb.trim());
-ok("l'indicateur « modifie » est actif", /modifie/.test(sb));
+ok("the status bar counts words", /\d+ words/.test(sb), sb.trim());
+ok("the modified indicator is on", /modified/.test(sb));
 
-/* ========================= 3. assainissement ========================= */
-console.log("\n--- assainissement du HTML ---");
+/* ========================= 3. sanitisation ========================= */
+console.log("\n--- HTML sanitisation ---");
 await page.evaluate(() => { window.__xss = 0; });
 await retype([
   "<script>window.__xss=1<\/script>",
   '<img src=x onerror="window.__xss=1">',
-  '<a href="javascript:window.__xss=1">lien</a>',
+  '<a href="javascript:window.__xss=1">link</a>',
   '<iframe src="https://example.com"></iframe>',
   "<style>body{display:none}</style>",
   '<form action="https://evil.test"><input name="a"></form>',
-  "[lien normal](https://example.com)",
+  "[ordinary link](https://example.com)",
 ].join("\n\n"));
 
 const rendered = await page.$eval("#preview", (e) => e.innerHTML);
-ok("aucun script execute", (await page.evaluate(() => window.__xss)) === 0);
-ok("aucune balise <script> conservee", !/<script/i.test(rendered));
-ok("aucun gestionnaire onerror conserve", !/onerror/i.test(rendered));
-ok("aucune URL javascript: conservee", !/javascript:/i.test(rendered));
-ok("aucune <iframe> conservee", !/<iframe/i.test(rendered));
-ok("aucune <style> conservee", !/<style/i.test(rendered));
-ok("aucun <form> conserve", !/<form/i.test(rendered));
-ok("les liens legitimes recoivent rel=noopener noreferrer",
+ok("no script executed", (await page.evaluate(() => window.__xss)) === 0);
+ok("no <script> tag kept", !/<script/i.test(rendered));
+ok("no onerror handler kept", !/onerror/i.test(rendered));
+ok("no javascript: URL kept", !/javascript:/i.test(rendered));
+ok("no <iframe> kept", !/<iframe/i.test(rendered));
+ok("no <style> kept", !/<style/i.test(rendered));
+ok("no <form> kept", !/<form/i.test(rendered));
+ok("legitimate links get rel=noopener noreferrer",
   await page.$eval('#preview a[href^="https://example.com"]',
     (a) => a.rel === "noopener noreferrer" && a.target === "_blank").catch(() => false));
-ok("l'interface reste intacte apres injection", (await page.$(".tb")) !== null);
+ok("the interface survives the injection", (await page.$(".tb")) !== null);
 
-/* ========================= 4. etancheite reseau ========================= */
-console.log("\n--- etancheite reseau ---");
-// La valeur de retour des API reseau ne prouve rien : le constructeur
-// WebSocket ne leve pas d'exception synchrone, et sendBeacon() renvoie `true`
-// des la mise en file, avant que la CSP n'intervienne. Le seul temoin qui
-// fasse autorite est l'evenement `securitypolicyviolation`.
+/* ========================= 4. network containment ========================= */
+console.log("\n--- network containment ---");
+// Return values prove nothing here: the WebSocket constructor throws no
+// synchronous exception, and sendBeacon() returns `true` as soon as the request
+// is queued, before the CSP steps in. The only authoritative witness is the
+// `securitypolicyviolation` event.
 const violations = await page.evaluate(async () => {
   const seen = [];
   document.addEventListener("securitypolicyviolation", (e) =>
@@ -176,262 +184,289 @@ const violations = await page.evaluate(async () => {
   return seen;
 });
 const blocked = (f) => violations.some((v) => v.includes(f));
-ok("fetch() est bloque par connect-src",
+ok("fetch() is blocked by connect-src",
   blocked("connect-src -> https://example.test/leak"), violations.join(" | "));
-ok("WebSocket est bloque par connect-src", blocked("connect-src -> wss://example.test/leak"));
-ok("sendBeacon est bloque par connect-src",
+ok("WebSocket is blocked by connect-src", blocked("connect-src -> wss://example.test/leak"));
+ok("sendBeacon is blocked by connect-src",
   violations.filter((v) => v.includes("connect-src -> https://example.test/leak")).length >= 2);
-ok("les images distantes sont bloquees par img-src",
+ok("remote images are blocked by img-src",
   blocked("img-src -> https://example.test/pixel.png"));
-ok("les imports dynamiques distants sont bloques", blocked("https://example.test/mod.js"));
+ok("remote dynamic imports are blocked", blocked("https://example.test/mod.js"));
 
 /* ========================= 5. interface ========================= */
 console.log("\n--- interface ---");
 const display = (sel) => page.$eval(sel, (e) => getComputedStyle(e).display);
 
 await (await btn("Source")).click();
-ok("mode editeur : l'apercu est masque", (await display(".pane-preview")) === "none");
-await (await btn("Rendu")).click();
-ok("mode apercu : l'editeur est masque", (await display(".pane-editor")) === "none");
-await (await btn("Partage")).click();
-ok("mode partage : les deux panneaux sont visibles",
+ok("Source layout: the preview is hidden", (await display(".pane-preview")) === "none");
+await (await btn("Preview")).click();
+ok("Preview layout: the source is hidden", (await display(".pane-editor")) === "none");
+await (await btn("Split")).click();
+ok("Split layout: both panes are visible",
   (await display(".pane-preview")) !== "none" && (await display(".pane-editor")) !== "none");
 
 const t0 = await page.evaluate(() => document.documentElement.dataset.theme);
 await (await btn("Theme")).click();
 const t1 = await page.evaluate(() => document.documentElement.dataset.theme);
-ok("le theme bascule", t0 !== t1, `${t0} -> ${t1}`);
+ok("the theme toggles", t0 !== t1, `${t0} -> ${t1}`);
 await (await btn("Theme")).click();
 
 await (await btn("?")).click();
-ok("la fenetre « A propos » s'ouvre", (await page.$(".sheet")) !== null);
-await (await btn("Fermer")).click();
-ok("la fenetre « A propos » se ferme", (await page.$(".sheet")) === null);
+ok("the About dialog opens", (await page.$(".sheet")) !== null);
+await (await btn("Close")).click();
+ok("the About dialog closes", (await page.$(".sheet")) === null);
 
-/* ========================= 6. brouillon local ========================= */
-console.log("\n--- brouillon local ---");
+/* ========================= 6. local draft ========================= */
+console.log("\n--- local draft ---");
 const draft = () => page.evaluate(() => localStorage.getItem("mdedit.draft"));
-ok("rien n'est stocke par defaut", (await draft()) === null);
+ok("nothing is stored by default", (await draft()) === null);
 await page.click(".chk input");
 await wait(300);
-ok("le brouillon est ecrit une fois l'option cochee", (await draft()) !== null);
+ok("the draft is written once the box is ticked", (await draft()) !== null);
 await page.click(".chk input");
 await wait(300);
-ok("le brouillon est efface au decochage", (await draft()) === null);
+ok("the draft is erased when unticked", (await draft()) === null);
 
-/* ========================= 7. application autonome ========================= */
-console.log("\n--- fichier autonome telechargeable ---");
+/* ========================= 7. standalone application ========================= */
+console.log("\n--- downloadable standalone file ---");
 await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: DL });
 
-const CANARY = "MON SECRET ABSOLU 4242";
+const CANARY = "MY ABSOLUTE SECRET 4242";
 await retype(CANARY);
-await (await btn("Telecharger l'app")).click();
+await (await btn("Download app")).click();
 
 const standalonePath = join(DL, "md-editor.html");
 for (let i = 0; i < 40 && !existsSync(standalonePath); i++) await wait(200);
-ok("le fichier md-editor.html est telecharge", existsSync(standalonePath), readdirSync(DL).join(","));
+ok("md-editor.html is downloaded", existsSync(standalonePath), readdirSync(DL).join(","));
 
 if (existsSync(standalonePath)) {
   const file = readFileSync(standalonePath, "utf8");
-  ok("le fichier autonome ne contient pas le document de l'utilisateur", !file.includes(CANARY));
+  ok("the standalone file does not contain the user's document", !file.includes(CANARY));
 
   const fileJs = file.match(/<script id="app-js">([\s\S]*?)<\/script>/)[1];
   const declared = file.match(/script-src 'sha256-([^']+)'/)[1];
-  ok("le condensat du fichier autonome correspond a son script",
+  ok("the standalone file's digest matches its script",
     createHash("sha256").update(fileJs, "utf8").digest("base64") === declared);
 
-  // Le test decisif : le fichier telecharge doit demarrer seul, en file://.
+  // The decisive test: the downloaded file must start on its own, from file://.
   const { page: p2, errors: e2, csp: c2 } = await newPage();
   await p2.goto("file://" + standalonePath, { waitUntil: "networkidle0" });
   await wait(800);
-  ok("le fichier autonome demarre en file:// sans erreur", e2.length === 0, e2.slice(0, 2).join(" | "));
-  ok("le fichier autonome n'emet aucune violation CSP", c2.length === 0, c2.slice(0, 2).join(" | "));
-  ok("le fichier autonome monte CodeMirror", (await p2.$(".cm-editor .cm-content")) !== null);
-  ok("le fichier autonome rend l'apercu",
-    (await p2.$eval("#preview h1", (e) => e.textContent).catch(() => null)) === "Editeur Markdown local");
+  ok("the standalone file starts from file:// without error", e2.length === 0, e2.slice(0, 2).join(" | "));
+  ok("the standalone file raises no CSP violation", c2.length === 0, c2.slice(0, 2).join(" | "));
+  ok("the standalone file mounts CodeMirror", (await p2.$(".cm-editor .cm-content")) !== null);
+  ok("the standalone file renders the preview",
+    (await p2.$eval("#preview h1", (e) => e.textContent).catch(() => null)) === "Local Markdown editor");
   await p2.close();
 }
 
-/* ========================= 8. edition dans le rendu ========================= */
-console.log("\n--- edition dans le rendu ---");
+/* ========================= 8. Save as ========================= */
+console.log("\n--- Save as ---");
 
-/** Texte du panneau source, reconstitue depuis les lignes affichees. */
+// The File System Access API only exists in a secure context. Over plain HTTP
+// on an IP address it is absent, and both buttons fall back to a download --
+// which is exactly when "Save as" must still ask for a name, or it becomes
+// indistinguishable from "Save".
+const hasFSA = await page.evaluate(() => typeof window.showSaveFilePicker === "function");
+
+if (hasFSA) {
+  ok("the file picker is available on this origin, Save as uses it", true,
+    "run against an http:// IP origin to exercise the fallback");
+} else {
+  let asked = null;
+  page.once("dialog", async (d) => { asked = d.message(); await d.dismiss(); });
+  await (await btn("Save as")).click();
+  await wait(500);
+  ok("without a file picker, Save as asks for a file name",
+    asked !== null && /name/i.test(asked), String(asked));
+}
+
+/* ========================= 9. editing the preview ========================= */
+console.log("\n--- editing the preview ---");
+
+/** Source pane text, reassembled from the displayed lines. */
 const sourceText = () =>
   page.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent).join("\n"));
 
-/** Vide l'editeur riche et y tape du contenu. */
+/**
+ * Empty the rich editor and type into it.
+ *
+ * Clearing goes through the source pane rather than a select-all inside the
+ * rich editor: the source is authoritative, so emptying it propagates down
+ * deterministically. Selecting inside the rich editor right after clicking into
+ * it races with the pending source-to-preview sync, and the test would flake.
+ */
 async function retypeRich(content) {
+  await clearSource();
+  await wait(400);
   await page.click("#rich .ProseMirror");
-  await page.keyboard.down("Control");
-  await page.keyboard.press("KeyA");
-  await page.keyboard.up("Control");
-  await page.keyboard.press("Backspace");
   if (content) await page.keyboard.type(content);
   await wait(500);
 }
 
-// --- disposition et mode d'edition sont independants ---
-// Le bouton ne doit jamais modifier la disposition choisie : quand le rendu
-// n'est pas affiche, il est desactive, pas detourne.
+// --- layout and editing mode are independent ---
+// The toggle must never alter the chosen layout: when the preview is hidden it
+// is disabled, not hijacked.
 await (await btn("Source")).click();
 await wait(300);
-ok("en vue Source, le bouton de modification est desactive",
-  (await (await btn("Modifier le rendu")).evaluate((b) => b.disabled)) === true);
-ok("le ruban reste masque en vue Source",
+ok("in Source layout the edit toggle is disabled",
+  (await (await btn("Edit preview")).evaluate((b) => b.disabled)) === true);
+ok("the ribbon stays hidden in Source layout",
   (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
 
-await (await btn("Partage")).click();
+await (await btn("Split")).click();
 await wait(300);
-ok("le bouton redevient actif des que le rendu est affiche",
-  (await (await btn("Modifier le rendu")).evaluate((b) => b.disabled)) === false);
+ok("the toggle becomes usable as soon as the preview is shown",
+  (await (await btn("Edit preview")).evaluate((b) => b.disabled)) === false);
 
-await retype("# Depart\n\nTexte initial.");
+await retype("# Start\n\nInitial text.");
 const viewBefore = await page.$eval(".panes", (e) => e.dataset.view);
-await (await btn("Modifier le rendu")).click();
+await (await btn("Edit preview")).click();
 await wait(400);
 
-ok("activer la modification ne change pas la disposition",
+ok("turning editing on does not change the layout",
   (await page.$eval(".panes", (e) => e.dataset.view)) === viewBefore, viewBefore);
 
-// L'etat actif doit se lire au premier coup d'oeil, donc arborer la meme
-// couleur que l'option de disposition selectionnee.
-ok("le bouton actif se distingue visuellement", await page.evaluate(() => {
+// The active state must read at a glance, so it wears the same colour as the
+// selected layout option.
+ok("the active toggle is visually distinct", await page.evaluate(() => {
   const toggle = [...document.querySelectorAll(".tb button")]
-    .find((b) => b.textContent === "Modifier le rendu");
+    .find((b) => b.textContent === "Edit preview");
   const selected = document.querySelector('.seg button[aria-pressed="true"]');
   const c = getComputedStyle(toggle);
   return c.backgroundColor === getComputedStyle(selected).backgroundColor &&
     c.backgroundColor !== getComputedStyle(document.body).backgroundColor;
 }));
 
-ok("le ruban de mise en forme apparait",
+ok("the formatting ribbon appears",
   (await page.$eval(".rb", (e) => getComputedStyle(e).display)) !== "none");
-ok("l'editeur riche est monte", (await page.$("#rich .ProseMirror")) !== null);
-ok("l'apercu en lecture est masque",
+ok("the rich editor is mounted", (await page.$("#rich .ProseMirror")) !== null);
+ok("the read-only preview is hidden",
   (await page.$eval("#preview", (e) => getComputedStyle(e).display)) === "none");
-ok("le rendu reprend le document courant",
-  (await page.$eval("#rich h1", (e) => e.textContent).catch(() => null)) === "Depart");
+ok("the preview picks up the current document",
+  (await page.$eval("#rich h1", (e) => e.textContent).catch(() => null)) === "Start");
 
-// --- la frappe dans le rendu remonte vers la source ---
-await retypeRich("Ecrit dans le rendu");
-ok("la frappe dans le rendu met a jour la source",
-  (await sourceText()).includes("Ecrit dans le rendu"), await sourceText());
+// --- typing in the preview reaches the source ---
+await retypeRich("Written in the preview");
+ok("typing in the preview updates the source",
+  (await sourceText()).includes("Written in the preview"), await sourceText());
 
-// --- le ruban applique bien du Markdown ---
+// --- the ribbon really produces Markdown ---
 await page.keyboard.down("Control");
 await page.keyboard.press("KeyA");
 await page.keyboard.up("Control");
-await (await btn("G")).click();
+await (await btn("B")).click();
 await wait(400);
-ok("le bouton Gras produit du **gras** dans la source",
-  /\*\*Ecrit dans le rendu\*\*/.test(await sourceText()), await sourceText());
+ok("the Bold button produces **bold** in the source",
+  /\*\*Written in the preview\*\*/.test(await sourceText()), await sourceText());
 
 await page.keyboard.down("Control");
 await page.keyboard.press("KeyA");
 await page.keyboard.up("Control");
-await (await btn("G")).click();
+await (await btn("B")).click();
 await wait(300);
 
 await page.select(".rb-select", "h2");
 await wait(400);
-ok("le selecteur de style produit un titre de niveau 2",
+ok("the style selector produces a level 2 heading",
   /^##\s/.test((await sourceText()).trim()), await sourceText());
 
 await page.select(".rb-select", "p");
 await wait(300);
 
-// --- listes et taches ---
+// --- lists and tasks ---
 await retypeRich("alpha");
-await (await btn("Taches")).click();
+await (await btn("Tasks")).click();
 await wait(400);
-ok("le bouton Taches produit une case a cocher",
+ok("the Tasks button produces a checkbox",
   /^-\s\[ \]\salpha/.test((await sourceText()).trim()), await sourceText());
 
 await page.click("#rich .task-check");
 await wait(400);
-ok("cliquer la case coche la tache dans la source",
+ok("clicking the box ticks the task in the source",
   /^-\s\[x\]\salpha/.test((await sourceText()).trim()), await sourceText());
 
-ok("la case cochee se reflete dans le rendu",
+ok("the ticked box is reflected in the preview",
   (await page.$eval("#rich li.task-item", (e) => e.getAttribute("data-checked"))) === "true");
 
-// --- tableaux ---
+// --- tables ---
 await retypeRich("");
-await (await btn("Tableau")).click();
+await (await btn("Table")).click();
 await wait(500);
 const tableSource = await sourceText();
-ok("le bouton Tableau produit une table GFM",
+ok("the Table button produces a GFM table",
   /\|\s*\|/.test(tableSource) && /\|\s*---\s*\|/.test(tableSource), tableSource.slice(0, 80));
-ok("les outils de tableau apparaissent quand le curseur y est",
+ok("table tools appear when the cursor is inside one",
   (await page.$eval(".rb-group", (e) => getComputedStyle(e).display)) !== "none");
-ok("le tableau est rendu dans l'editeur riche",
+ok("the table is rendered in the rich editor",
   (await page.$$eval("#rich table th", (e) => e.length)) === 3);
 
 await (await btn("+Col")).click();
 await wait(400);
-ok("ajouter une colonne se repercute dans le rendu",
+ok("adding a column shows up in the preview",
   (await page.$$eval("#rich table th", (e) => e.length)) === 4);
 
-// --- la source reste maitresse : ce qui est tape a gauche descend a droite ---
-await retype("## Depuis la source\n\nAvec du *style*.");
+// --- the source stays authoritative: what is typed left flows right ---
+await retype("## From the source\n\nWith some *style*.");
 await wait(500);
-ok("la frappe dans la source met a jour le rendu",
-  (await page.$eval("#rich h2", (e) => e.textContent).catch(() => null)) === "Depuis la source");
-ok("l'emphase saisie dans la source est rendue",
+ok("typing in the source updates the preview",
+  (await page.$eval("#rich h2", (e) => e.textContent).catch(() => null)) === "From the source");
+ok("emphasis typed in the source is rendered",
   (await page.$$eval("#rich em", (e) => e.length)) === 1);
 
-// --- le HTML brut traverse l'aller-retour ---
-const HTML_FIXTURE = "Avant\n\n<details><summary>Plus</summary>\ncache\n</details>\n\nApres";
+// --- raw HTML survives the round trip ---
+const HTML_FIXTURE = "Before\n\n<details><summary>More</summary>\nhidden\n</details>\n\nAfter";
 await pasteSource(HTML_FIXTURE);
-ok("la source recoit le fragment HTML sans alteration",
+ok("the source receives the HTML fragment unaltered",
   (await sourceText()) === HTML_FIXTURE, await sourceText());
 await wait(400);
-ok("le HTML brut est signale comme non modifiable dans le rendu",
+
+ok("raw HTML is marked as non-editable in the preview",
   (await page.$("#rich .raw-html")) !== null);
 
-// On edite le paragraphe voisin, pas le bloc HTML. Cliquer sur ce dernier le
-// selectionnerait comme un noeud atomique -- taper le remplacerait alors, ce
-// qui est le comportement normal d'un editeur, mais pas ce qu'on teste ici.
+// Edit the neighbouring paragraph, not the HTML block. Clicking the latter
+// would select it as an atomic node -- typing would then replace it, which is
+// normal editor behaviour but not what is under test here.
 await page.click("#rich p");
 await page.keyboard.press("End");
 await page.keyboard.type(" !");
 await wait(500);
 const afterEdit = await sourceText();
-ok("le HTML brut survit a une edition ailleurs dans le document",
-  afterEdit.includes("<details><summary>Plus</summary>"), afterEdit);
-ok("l'edition voisine a bien eu lieu", afterEdit.includes("Avant !"), afterEdit);
+ok("raw HTML survives an edit elsewhere in the document",
+  afterEdit.includes("<details><summary>More</summary>"), afterEdit);
+ok("the neighbouring edit did happen", afterEdit.includes("Before !"), afterEdit);
 
-// --- sortir du mode riche ne perd rien ---
-await retypeRich("Contenu final du rendu");
+// --- leaving rich mode loses nothing ---
+await retypeRich("Final preview content");
 const viewBeforeExit = await page.$eval(".panes", (e) => e.dataset.view);
-await (await btn("Modifier le rendu")).click();
+await (await btn("Edit preview")).click();
 await wait(400);
-ok("quitter le mode riche repercute les dernieres modifications",
-  (await sourceText()).includes("Contenu final du rendu"), await sourceText());
-ok("desactiver la modification ne change pas non plus la disposition",
+ok("leaving rich mode pushes the last changes down",
+  (await sourceText()).includes("Final preview content"), await sourceText());
+ok("turning editing off does not change the layout either",
   (await page.$eval(".panes", (e) => e.dataset.view)) === viewBeforeExit, viewBeforeExit);
-ok("l'apercu en lecture revient",
+ok("the read-only preview comes back",
   (await page.$eval("#preview", (e) => getComputedStyle(e).display)) !== "none");
-ok("le ruban disparait",
+ok("the ribbon disappears",
   (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
 
-/* ========================= 9. export du rendu ========================= */
-console.log("\n--- export du rendu ---");
-await retype("# Rapport\n\nContenu **exporte**.");
-await (await btn("Exporter HTML")).click();
+/* ========================= 10. exporting the rendered document ========================= */
+console.log("\n--- exporting the rendered document ---");
+await retype("# Report\n\n**Exported** content.");
+await (await btn("Export HTML")).click();
 
-const exportPath = join(DL, "sans-titre.html");
+const exportPath = join(DL, "untitled.html");
 for (let i = 0; i < 40 && !existsSync(exportPath); i++) await wait(200);
 const exported = existsSync(exportPath) ? readFileSync(exportPath, "utf8") : "";
-ok("le rendu est exporte en HTML", exported.length > 0, readdirSync(DL).join(","));
-ok("l'export contient le document rendu", /<h1[^>]*>Rapport<\/h1>/.test(exported));
-ok("l'export embarque sa propre CSP verrouillee", /default-src 'none'/.test(exported));
-ok("l'export ne contient aucun script", !/<script/i.test(exported));
+ok("the rendered document is exported as HTML", exported.length > 0, readdirSync(DL).join(","));
+ok("the export contains the rendered document", /<h1[^>]*>Report<\/h1>/.test(exported));
+ok("the export carries its own locked-down CSP", /default-src 'none'/.test(exported));
+ok("the export contains no script", !/<script/i.test(exported));
 
 await browser.close();
 console.log();
 if (fails) {
-  console.error(`  ${fails} test(s) en echec\n`);
+  console.error(`  ${fails} test(s) failed\n`);
   process.exit(1);
 }
-console.log("  tous les tests passent\n");
+console.log("  all tests pass\n");

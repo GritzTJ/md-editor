@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------
-   md-editor - feuille de style unique, inlinee dans le HTML final.
-   Aucune police ni ressource externe : la CSP interdit tout reseau.
+   md-editor - single stylesheet, inlined into the final HTML.
+   No external font or resource: the CSP forbids all network access.
    --------------------------------------------------------------- */
 
 :root {
@@ -30,10 +30,9 @@
     "Liberation Mono", monospace;
 }
 
-/* Avant que le script ne s'execute, `data-theme` n'est pas encore pose et le
-   corps de page est vide : sans ceci, un utilisateur en theme sombre verrait
-   un bref aplat blanc. Seules les deux couleurs reellement peintes a cet
-   instant sont necessaires. */
+/* Before the script runs, `data-theme` is not set yet and the body is empty:
+   without this, a dark-theme user would see a brief white flash. Only the two
+   colours actually painted at that moment are needed. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --bg: #0d1117;
@@ -79,9 +78,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Colonne flex plutot que grille : le ruban de mise en forme apparait et
-   disparait selon le mode, et une grille a rangees fixes attribuerait le `1fr`
-   au mauvais enfant selon leur nombre. */
+/* Flex column rather than grid: the formatting ribbon appears and disappears
+   with the mode, and a grid with fixed rows would hand the `1fr` to the wrong
+   child depending on how many are present. */
 #app {
   display: flex;
   flex-direction: column;
@@ -91,7 +90,7 @@ body {
 
 .tb, .rb, .sb { flex: 0 0 auto; }
 
-/* ------------------------------ barre d'outils ------------------------------ */
+/* ------------------------------ toolbar ------------------------------ */
 
 .tb {
   display: flex;
@@ -148,9 +147,9 @@ input:focus-visible {
 
 .seg > button:first-child { border-left: 0; }
 
-/* Un bouton bascule doit se voir actif au premier coup d'oeil. La regle couvre
-   la barre d'outils entiere, et pas seulement les groupes segmentes : un
-   simple bouton bascule se confondait sinon avec sa couleur de survol. */
+/* A toggle must read as active at a glance. This rule covers the whole
+   toolbar, not just segmented groups: a plain toggle button was otherwise
+   indistinguishable from its own hover colour. */
 .tb button[aria-pressed="true"],
 .seg > button[aria-pressed="true"] {
   background: var(--accent);
@@ -179,7 +178,7 @@ input:focus-visible {
 
 .chk input { margin: 0; cursor: pointer; }
 
-/* ------------------------------ panneaux ------------------------------ */
+/* ------------------------------ panes ------------------------------ */
 
 .panes {
   display: grid;
@@ -232,7 +231,7 @@ input:focus-visible {
 .cm-md-list { color: var(--syn-link); }
 .cm-md-sep { color: var(--syn-mark); }
 
-/* ------------------------------ apercu ------------------------------ */
+/* ------------------------------ rendered document ------------------------------ */
 
 .md {
   flex: 1 1 auto;
@@ -328,12 +327,12 @@ input:focus-visible {
   background: var(--bg-alt);
 }
 
-/* --- cases a cocher -------------------------------------------------------
-   L'apercu et l'editeur riche produisent la meme structure -- un <li> portant
-   data-checked, suivi d'un <span class="task-check"> -- afin de partager ces
-   regles. La case est dessinee en CSS : un <input> obligerait a autoriser une
-   balise de formulaire dans l'assainissement, et les caracteres Unicode de
-   case a cocher s'affichent mal selon les polices. */
+/* --- task checkboxes ------------------------------------------------------
+   Preview and rich editor emit the same structure -- an <li> carrying
+   data-checked, followed by a <span class="task-check"> -- so they can share
+   these rules. The box is drawn in CSS: an <input> would mean allowing a form
+   tag through sanitisation, and Unicode checkbox characters render poorly
+   depending on the font. */
 
 .md li.task-item {
   list-style: none;
@@ -371,14 +370,14 @@ input:focus-visible {
   transform: rotate(45deg);
 }
 
-/* En mode riche le corps de l'element est enveloppe, pour que le curseur ne
-   puisse pas se placer sur la case elle-meme. */
+/* In rich mode the item body is wrapped so the cursor cannot land on the
+   checkbox itself. */
 .task-body { flex: 1 1 auto; min-width: 0; }
 .md li.task-item > .task-body > :last-child { margin-bottom: 0; }
 
-/* --- HTML brut ------------------------------------------------------------
-   Non modifiable dans le rendu, mais conserve tel quel a la sauvegarde : il
-   est donc affiche comme un bloc distinct plutot que masque. */
+/* --- raw HTML -------------------------------------------------------------
+   Not editable in the preview, but kept verbatim on save: shown as a distinct
+   block rather than hidden. */
 
 .md .raw-html,
 .md .raw-html-inline {
@@ -393,7 +392,7 @@ input:focus-visible {
 .md .raw-html { padding: 8px 12px; white-space: pre-wrap; }
 .md .raw-html-inline { padding: .05em .35em; }
 
-/* ------------------------------ ruban de mise en forme ------------------------------ */
+/* ------------------------------ formatting ribbon ------------------------------ */
 
 .rb {
   display: flex;
@@ -442,7 +441,7 @@ input:focus-visible {
   cursor: pointer;
 }
 
-/* ------------------------------ editeur riche (ProseMirror) ------------------------------ */
+/* ------------------------------ rich editor (ProseMirror) ------------------------------ */
 
 .md-rich { cursor: text; }
 
@@ -474,8 +473,8 @@ li.ProseMirror-selectednode::after {
   pointer-events: none;
 }
 
-/* Curseur affiche entre deux blocs non textuels (avant un tableau en tete de
-   document, par exemple), sans lequel ils seraient inatteignables au clavier. */
+/* Cursor shown between two non-text blocks (before a table at the top of the
+   document, say), without which they would be unreachable from the keyboard. */
 .ProseMirror-gapcursor {
   display: none;
   pointer-events: none;
@@ -497,8 +496,8 @@ li.ProseMirror-selectednode::after {
 .ProseMirror-focused .ProseMirror-gapcursor,
 .ProseMirror-gapcursor:has(*) { display: block; }
 
-/* Tableaux modifiables : la largeur fixe est indispensable, ProseMirror
-   calculant les positions de colonne a partir du modele. */
+/* Editable tables: the fixed layout is required, since ProseMirror derives
+   column positions from the model. */
 .ProseMirror table {
   border-collapse: collapse;
   table-layout: fixed;
@@ -536,7 +535,7 @@ li.ProseMirror-selectednode::after {
 
 .ProseMirror.resize-cursor { cursor: col-resize; }
 
-/* ------------------------------ barre d'etat ------------------------------ */
+/* ------------------------------ status bar ------------------------------ */
 
 .sb {
   display: flex;
@@ -557,7 +556,7 @@ li.ProseMirror-selectednode::after {
 
 .hidden { display: none !important; }
 
-/* ------------------------------ dialogue ------------------------------ */
+/* ------------------------------ dialog ------------------------------ */
 
 .sheet {
   position: fixed;
@@ -594,8 +593,8 @@ li.ProseMirror-selectednode::after {
 .sheet-box li { margin: .3em 0; }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
-/* En dessous de cette largeur les panneaux s'empilent : la poignee agit alors
-   sur les lignes, et non plus sur les colonnes. */
+/* Below this width the panes stack: the handle then acts on rows rather than
+   columns. */
 @media (max-width: 720px) {
   .panes[data-view="split"] {
     grid-template-columns: 1fr;

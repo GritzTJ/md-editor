@@ -1,11 +1,11 @@
 /* ---------------------------------------------------------------------------
- * Editeur riche : le document « propre » devient la surface d'edition.
+ * Rich editor: the rendered document becomes the editing surface.
  *
- * L'interet de ProseMirror ici n'est pas l'apparence mais la contrainte : le
- * document manipule est un arbre valide au regard du schema Markdown. On ne
- * peut donc pas produire, meme par accident, un etat qui ne se resérialise
- * pas -- contrairement a un `contenteditable`, ou le navigateur genere un DOM
- * arbitraire qu'il faut ensuite deviner.
+ * ProseMirror is used here not for how it looks but for what it forbids: the
+ * document it manipulates is a tree that is valid against the Markdown schema.
+ * No state that fails to serialise can be reached, even by accident --
+ * unlike a `contenteditable`, where the browser produces arbitrary DOM that has
+ * to be guessed at afterwards.
  * ------------------------------------------------------------------------- */
 
 import { EditorState, TextSelection } from "prosemirror-state";
@@ -26,7 +26,6 @@ import {
   inputRules,
   wrappingInputRule,
   textblockTypeInputRule,
-  smartQuotes,
   InputRule,
 } from "prosemirror-inputrules";
 import { gapCursor } from "prosemirror-gapcursor";
@@ -47,7 +46,7 @@ const nodes = schema.nodes;
 const marks = schema.marks;
 
 /* ===========================================================================
- * Interrogation de l'etat courant
+ * Inspecting the current state
  * ======================================================================== */
 
 function markActive(state, type) {
@@ -63,7 +62,7 @@ function blockActive(state, type, attrs = {}) {
   return to <= $from.end() && $from.parent.hasMarkup(type, attrs);
 }
 
-/** Remonte jusqu'au premier ancetre du type demande. */
+/** Walk up to the nearest ancestor of the requested type. */
 function findAncestor(state, type) {
   const { $from } = state.selection;
   for (let d = $from.depth; d > 0; d--) {
@@ -82,22 +81,22 @@ function taskActive(state) {
 }
 
 /* ===========================================================================
- * Commandes
+ * Commands
  * ======================================================================== */
 
 /**
- * Bascule entre puce ordinaire et case a cocher.
+ * Toggle between a plain bullet and a checkbox.
  *
- * Une tache n'est pas un type de liste distinct en Markdown : c'est une puce
- * dont le contenu commence par `[ ]`. Le basculement agit donc sur l'attribut
- * de l'element, apres avoir cree la liste si besoin.
+ * A task is not a distinct list type in Markdown: it is a bullet whose content
+ * starts with `[ ]`. So the toggle acts on the item's attribute, creating the
+ * list first when needed.
  */
 function toggleTaskList(state, dispatch, view) {
   const item = findAncestor(state, nodes.list_item);
 
   if (!item) {
-    // Pas encore dans une liste : on en cree une, puis on rappelle la commande
-    // sur le nouvel etat pour cocher l'element fraichement produit.
+    // Not in a list yet: create one, then re-run against the new state to tick
+    // the item that was just produced.
     return wrapInList(nodes.bullet_list)(state, (tr) => {
       if (!dispatch) return;
       dispatch(tr);
@@ -119,7 +118,7 @@ function toggleTaskList(state, dispatch, view) {
   return true;
 }
 
-/** Coche ou decoche la tache sous le curseur. */
+/** Tick or untick the task under the cursor. */
 function toggleChecked(state, dispatch) {
   const item = findAncestor(state, nodes.list_item);
   if (!item || item.node.attrs.checked === null) return false;
@@ -141,7 +140,7 @@ function insertNode(type, attrs) {
   };
 }
 
-/** Tableau 3x3 avec ligne d'en-tete, comme l'insertion d'un traitement de texte. */
+/** A 3x3 table with a header row, the way a word processor inserts one. */
 function insertTable(rows = 3, cols = 3) {
   return (state, dispatch) => {
     const headerCells = [];
@@ -159,8 +158,7 @@ function insertTable(rows = 3, cols = 3) {
 
     if (dispatch) {
       const tr = state.tr.replaceSelectionWith(table);
-      // Placer le curseur dans la premiere cellule plutot que d'obliger
-      // l'utilisateur a cliquer dedans.
+      // Put the cursor in the first cell rather than making the user click in.
       const pos = tr.selection.from - table.nodeSize + 3;
       dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve(pos))).scrollIntoView());
     }
@@ -172,13 +170,13 @@ function setLink(state, dispatch) {
   if (markActive(state, marks.link)) {
     return toggleMark(marks.link)(state, dispatch);
   }
-  const href = window.prompt("Adresse du lien :", "https://");
+  const href = window.prompt("Link URL:", "https://");
   if (!href) return false;
 
   const { from, to, empty } = state.selection;
   if (dispatch) {
     if (empty) {
-      // Sans selection, on insere l'adresse comme texte du lien.
+      // With no selection, insert the URL as the link text.
       const text = schema.text(href, [marks.link.create({ href })]);
       dispatch(state.tr.replaceSelectionWith(text, false).scrollIntoView());
     } else {
@@ -189,44 +187,43 @@ function setLink(state, dispatch) {
 }
 
 function insertImage(state, dispatch) {
-  const src = window.prompt("Adresse de l'image :", "");
+  const src = window.prompt("Image URL:", "");
   if (!src) return false;
-  const alt = window.prompt("Texte alternatif :", "") || null;
+  const alt = window.prompt("Alternative text:", "") || null;
   return insertNode(nodes.image, { src, alt })(state, dispatch);
 }
 
 /* ===========================================================================
- * Raccourcis de frappe
+ * Input rules
  *
- * Taper « ## » ou « - » produit directement la structure correspondante :
- * c'est ce qui permet de continuer a ecrire en Markdown sans quitter le mode
- * riche.
+ * Typing `##` or `-` produces the matching structure directly: that is what
+ * lets you keep writing Markdown without leaving the rich mode.
  * ======================================================================== */
 
 function buildInputRules() {
   const rules = [
-    // > citation
+    // > block quote
     wrappingInputRule(/^\s*>\s$/, nodes.blockquote),
-    // 1. liste numerotee
+    // 1. numbered list
     wrappingInputRule(
       /^(\d+)\.\s$/,
       nodes.ordered_list,
       (match) => ({ order: +match[1] }),
       (match, node) => node.childCount + node.attrs.order === +match[1],
     ),
-    // - liste a puces
+    // - bulleted list
     wrappingInputRule(/^\s*([-+*])\s$/, nodes.bullet_list),
-    // ``` bloc de code
+    // ``` code block
     textblockTypeInputRule(/^```(\S*)\s$/, nodes.code_block, (match) => ({ params: match[1] || "" })),
-    // # titre
+    // # heading
     textblockTypeInputRule(/^(#{1,6})\s$/, nodes.heading, (match) => ({ level: match[1].length })),
-    // --- separateur
+    // --- horizontal rule
     new InputRule(/^(?:---|___|\*\*\*)\s$/, (state, match, start, end) =>
       state.tr.replaceRangeWith(start, end, nodes.horizontal_rule.create())),
   ];
 
-  // - [ ] tache : la puce est creee par la regle ci-dessus, celle-ci coche
-  // l'element une fois le marqueur tape.
+  // - [ ] task: the bullet comes from the rule above, this one ticks the item
+  // once the marker has been typed.
   rules.push(new InputRule(/^\[([ xX])\]\s$/, (state, match, start, end) => {
     const item = findAncestor(state, nodes.list_item);
     if (!item) return null;
@@ -242,14 +239,14 @@ function buildInputRules() {
 }
 
 /* ===========================================================================
- * Construction de l'editeur
+ * Building the editor
  * ======================================================================== */
 
 /**
  * @param {object} options
- * @param {HTMLElement} options.parent   conteneur d'accueil
- * @param {Function} options.onChange    appele a chaque modification du document
- * @param {Function} options.onState     appele quand l'etat des boutons change
+ * @param {HTMLElement} options.parent   host container
+ * @param {Function} options.onChange    called on every document change
+ * @param {Function} options.onState     called when the button states change
  */
 export function createRichEditor({ parent, onChange, onState }) {
   const keys = {
@@ -271,15 +268,14 @@ export function createRichEditor({ parent, onChange, onState }) {
     "Mod-Shift-7": toggleTaskList,
     "Mod-Shift-.": wrapIn(nodes.blockquote),
     "Mod-Shift-0": setBlockType(nodes.paragraph),
-    "Backspace": undefined, // laisse baseKeymap operer
   };
 
   for (let level = 1; level <= 6; level++) {
     keys[`Mod-Shift-${level}`] = setBlockType(nodes.heading, { level });
   }
 
-  // Tab circule entre les cellules d'un tableau, et sinon imbrique la liste :
-  // c'est le comportement attendu dans les deux contextes.
+  // Tab moves between table cells, and otherwise nests the list item: the
+  // expected behaviour in both contexts.
   keys["Tab"] = chainCommands(
     (state, dispatch, view) => (isInTable(state) ? goToNextCell(1)(state, dispatch, view) : false),
     sinkListItem(nodes.list_item),
@@ -288,8 +284,6 @@ export function createRichEditor({ parent, onChange, onState }) {
     (state, dispatch, view) => (isInTable(state) ? goToNextCell(-1)(state, dispatch, view) : false),
     liftListItem(nodes.list_item),
   );
-
-  delete keys["Backspace"];
 
   const plugins = [
     buildInputRules(),
@@ -311,9 +305,8 @@ export function createRichEditor({ parent, onChange, onState }) {
     },
 
     handleDOMEvents: {
-      // Clic sur la case a cocher d'une tache. Le noeud etant en
-      // contenteditable=false, l'evenement n'atteint pas le systeme de
-      // selection de ProseMirror : on l'intercepte ici.
+      // Click on a task checkbox. The node is contenteditable=false, so the
+      // event never reaches ProseMirror's selection machinery: catch it here.
       mousedown(view, event) {
         const target = event.target;
         if (!(target instanceof HTMLElement) || !target.classList.contains("task-check")) {
@@ -337,7 +330,7 @@ export function createRichEditor({ parent, onChange, onState }) {
     },
   });
 
-  /** Etat courant, pour refleter les boutons du ruban. */
+  /** Current state, used to mirror the ribbon buttons. */
   function status() {
     const state = view.state;
     const headingLevel = [1, 2, 3, 4, 5, 6]
@@ -363,7 +356,7 @@ export function createRichEditor({ parent, onChange, onState }) {
     };
   }
 
-  /** Applique une commande et rend le focus a l'editeur. */
+  /** Run a command and hand focus back to the editor. */
   function run(command) {
     command(view.state, view.dispatch, view);
     view.focus();
@@ -381,9 +374,8 @@ export function createRichEditor({ parent, onChange, onState }) {
 
     setMarkdown(markdown) {
       const doc = toDoc(markdown);
-      // Remplacement du document sans passer par une transaction de contenu :
-      // l'historique de l'editeur riche ne doit pas se remplir des frappes
-      // faites dans le panneau source.
+      // Replace the document outside a content transaction: the rich editor's
+      // history must not fill up with keystrokes made in the source pane.
       view.updateState(EditorState.create({ doc, plugins: view.state.plugins }));
       onState(status());
     },

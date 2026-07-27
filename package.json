@@ -2,7 +2,7 @@
   "name": "md-editor",
   "version": "1.0.0",
   "private": true,
-  "description": "Editeur/visualiseur Markdown 100% cote client, distribue en fichier HTML autonome",
+  "description": "Markdown editor that runs entirely in the browser, shipped as a single standalone HTML file",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",

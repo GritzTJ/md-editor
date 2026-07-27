@@ -1,19 +1,19 @@
 /* ---------------------------------------------------------------------------
- * Tests d'aller-retour Markdown <-> ProseMirror.
+ * Markdown <-> ProseMirror round-trip tests.
  *
- * Editer en mode riche regenere la source depuis le modele : ce qui n'est pas
- * representable dans le schema disparait. Ces tests sont donc la garantie
- * qu'aucune construction supportee par l'apercu n'est detruite en passant par
- * l'editeur riche.
+ * Editing in rich mode regenerates the source from the model: anything the
+ * schema cannot represent disappears. These tests are therefore the guarantee
+ * that no construct the preview supports is destroyed by going through the rich
+ * editor.
  *
- * Deux proprietes distinctes sont verifiees :
+ * Two distinct properties are checked:
  *
- *   - la CONSERVATION : le contenu semantique survit a un aller-retour ;
- *   - la STABILITE : un second aller-retour ne change plus rien. C'est la
- *     propriete qui compte vraiment. Une normalisation (`*` devenant `-`) est
- *     acceptable ; une source qui derive a chaque passage ne l'est pas.
+ *   - PRESERVATION: the semantic content survives one round trip;
+ *   - STABILITY: a second round trip changes nothing further. That is the one
+ *     that really matters. Normalisation (`*` becoming `-`) is acceptable; a
+ *     source that drifts on every pass is not.
  *
- * Le code teste manipule le DOM, il tourne donc dans un vrai navigateur.
+ * The code under test touches the DOM, so it runs in a real browser.
  *
  *   npm install --no-save puppeteer
  *   node test/roundtrip.mjs
@@ -26,48 +26,48 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/* --- Cas couverts -------------------------------------------------------- */
+/* --- Cases covered ------------------------------------------------------- */
 
 const CASES = [
-  ["titres", "# Un\n\n## Deux\n\n### Trois\n"],
-  ["emphase", "Du *italique*, du **gras**, du ***deux***.\n"],
-  ["barre", "Du ~~texte barre~~ ici.\n"],
-  ["code inline", "Appeler `npm run build` puis `node verify.mjs`.\n"],
-  ["liens", "Voir [le site](https://example.com) et [avec titre](https://example.com \"Titre\").\n"],
-  ["images", "![texte alternatif](image.png)\n"],
-  ["citation", "> Une citation\n>\n> sur deux paragraphes.\n"],
-  ["liste a puces", "- alpha\n- beta\n- gamma\n"],
-  ["liste numerotee", "1. premier\n2. deuxieme\n3. troisieme\n"],
-  ["liste imbriquee", "- alpha\n  - alpha.1\n  - alpha.2\n- beta\n"],
-  ["taches", "- [ ] a faire\n- [x] fait\n- puce ordinaire\n"],
-  ["taches imbriquees", "- [ ] parent\n  - [x] enfant\n"],
-  ["bloc de code", "```js\nconst secret = 42;\n```\n"],
-  ["bloc sans langage", "```\ntexte brut\n```\n"],
-  ["separateur", "avant\n\n---\n\napres\n"],
-  ["tableau simple", "| a | b |\n| --- | --- |\n| 1 | 2 |\n"],
-  ["tableau aligne", "| gauche | centre | droite |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |\n"],
-  ["tableau avec emphase", "| col |\n| --- |\n| **gras** et `code` |\n"],
-  ["tableau avec barre verticale", "| col |\n| --- |\n| a \\| b |\n"],
-  ["html bloc", "avant\n\n<details><summary>Plus</summary>\ncache\n</details>\n\napres\n"],
-  ["html inline", "Un <kbd>Ctrl</kbd> au milieu.\n"],
-  ["melange", "# Titre\n\nTexte **gras**.\n\n- [ ] tache\n- puce\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n> citation\n\n```sh\necho ok\n```\n"],
+  ["headings", "# One\n\n## Two\n\n### Three\n"],
+  ["emphasis", "Some *italic*, some **bold**, some ***both***.\n"],
+  ["strikethrough", "Some ~~struck text~~ here.\n"],
+  ["inline code", "Run `npm run build` then `node verify.mjs`.\n"],
+  ["links", "See [the site](https://example.com) and [with title](https://example.com \"Title\").\n"],
+  ["images", "![alternative text](image.png)\n"],
+  ["block quote", "> A quote\n>\n> across two paragraphs.\n"],
+  ["bulleted list", "- alpha\n- beta\n- gamma\n"],
+  ["numbered list", "1. first\n2. second\n3. third\n"],
+  ["nested list", "- alpha\n  - alpha.1\n  - alpha.2\n- beta\n"],
+  ["tasks", "- [ ] to do\n- [x] done\n- ordinary bullet\n"],
+  ["nested tasks", "- [ ] parent\n  - [x] child\n"],
+  ["code block", "```js\nconst secret = 42;\n```\n"],
+  ["code block without language", "```\nplain text\n```\n"],
+  ["horizontal rule", "before\n\n---\n\nafter\n"],
+  ["simple table", "| a | b |\n| --- | --- |\n| 1 | 2 |\n"],
+  ["aligned table", "| left | centre | right |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |\n"],
+  ["table with emphasis", "| col |\n| --- |\n| **bold** and `code` |\n"],
+  ["table with a pipe", "| col |\n| --- |\n| a \\| b |\n"],
+  ["html block", "before\n\n<details><summary>More</summary>\nhidden\n</details>\n\nafter\n"],
+  ["inline html", "A <kbd>Ctrl</kbd> in the middle.\n"],
+  ["mixture", "# Title\n\n**Bold** text.\n\n- [ ] task\n- bullet\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n> quote\n\n```sh\necho ok\n```\n"],
 
-  // Cas ou le serialiseur travaille avec un delimiteur courant non vide : sans
-  // precaution, ce delimiteur se recopie a l'interieur des cellules.
-  ["tableau dans citation", "> | a | b |\n> | --- | --- |\n> | 1 | 2 |\n"],
-  ["tableau dans liste", "- element\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n"],
-  ["bloc de code dans liste", "- element\n\n  ```js\n  const x = 1;\n  ```\n"],
-  ["citation imbriquee", "> niveau un\n>\n> > niveau deux\n"],
-  ["liste large", "- premier\n\n- deuxieme\n\n- troisieme\n"],
-  ["liste numerotee decalee", "5. cinq\n6. six\n7. sept\n"],
-  ["retour a la ligne force", "ligne un\\\nligne deux\n"],
-  ["caracteres a echapper", "Un \\* etoile, un \\_ tiret bas, un \\` accent.\n"],
-  ["lien dans tableau", "| col |\n| --- |\n| [lien](https://example.com) |\n"],
-  ["tache avec emphase", "- [x] tache **importante**\n"],
-  ["html dans liste", "- element avec <kbd>Ctrl</kbd>\n"],
+  // Cases where the serialiser works with a non-empty current delimiter:
+  // without care, that delimiter gets copied inside the cells.
+  ["table in a block quote", "> | a | b |\n> | --- | --- |\n> | 1 | 2 |\n"],
+  ["table in a list", "- item\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |\n"],
+  ["code block in a list", "- item\n\n  ```js\n  const x = 1;\n  ```\n"],
+  ["nested block quote", "> level one\n>\n> > level two\n"],
+  ["loose list", "- first\n\n- second\n\n- third\n"],
+  ["numbered list with offset", "5. five\n6. six\n7. seven\n"],
+  ["hard line break", "line one\\\nline two\n"],
+  ["escaped characters", "A \\* star, a \\_ underscore, a \\` backtick.\n"],
+  ["link in a table", "| col |\n| --- |\n| [link](https://example.com) |\n"],
+  ["task with emphasis", "- [x] **important** task\n"],
+  ["html in a list", "- item with <kbd>Ctrl</kbd>\n"],
 ];
 
-/* --- Bundle du moteur, execute dans le navigateur ------------------------ */
+/* --- Bundle the engine, run it in the browser ---------------------------- */
 
 const entry = `
 import { toDoc, toMarkdown, renderMarkdown } from ${JSON.stringify(resolve(root, "src/markdown.js"))};
@@ -103,44 +103,44 @@ const crashes = [];
 tab.on("pageerror", (e) => crashes.push(String(e)));
 await tab.setContent(page, { waitUntil: "domcontentloaded" });
 
-/* --- Execution ----------------------------------------------------------- */
+/* --- Run ----------------------------------------------------------------- */
 
 let fails = 0;
 const show = (s) => JSON.stringify(s);
 
-console.log("\n--- aller-retour Markdown <-> ProseMirror ---\n");
+console.log("\n--- Markdown <-> ProseMirror round trip ---\n");
 
 for (const [name, src] of CASES) {
   let result;
   try {
     result = await tab.evaluate((s) => window.__rt(s), src);
   } catch (err) {
-    console.log(`  FAIL  ${name} -- exception : ${String(err).split("\n")[0]}`);
+    console.log(`  FAIL  ${name} -- exception: ${String(err).split("\n")[0]}`);
     fails++;
     continue;
   }
 
   const stable = result.once === result.twice;
   if (!stable) {
-    console.log(`  FAIL  ${name} -- instable`);
-    console.log(`        passe 1 : ${show(result.once)}`);
-    console.log(`        passe 2 : ${show(result.twice)}`);
+    console.log(`  FAIL  ${name} -- unstable`);
+    console.log(`        pass 1: ${show(result.once)}`);
+    console.log(`        pass 2: ${show(result.twice)}`);
     fails++;
     continue;
   }
 
-  // Le rendu doit survivre : on compare le HTML produit par la source d'origine
-  // a celui produit apres aller-retour. C'est plus exigeant qu'une egalite de
-  // texte, et plus proche de ce que l'utilisateur constate.
+  // The rendering must survive: compare the HTML produced by the original
+  // source with the HTML produced after the round trip. That is stricter than
+  // string equality, and closer to what the user actually sees.
   const [htmlBefore, htmlAfter] = await tab.evaluate(
     (a, b) => [window.__render(a), window.__render(b)], src, result.once);
   const norm = (h) => h.replace(/\s+/g, " ").trim();
 
   if (norm(htmlBefore) !== norm(htmlAfter)) {
-    console.log(`  FAIL  ${name} -- le rendu change apres aller-retour`);
-    console.log(`        avant : ${show(norm(htmlBefore))}`);
-    console.log(`        apres : ${show(norm(htmlAfter))}`);
-    console.log(`        source regeneree : ${show(result.once)}`);
+    console.log(`  FAIL  ${name} -- the rendering changes after a round trip`);
+    console.log(`        before: ${show(norm(htmlBefore))}`);
+    console.log(`        after:  ${show(norm(htmlAfter))}`);
+    console.log(`        regenerated source: ${show(result.once)}`);
     fails++;
     continue;
   }
@@ -149,14 +149,14 @@ for (const [name, src] of CASES) {
 }
 
 if (crashes.length) {
-  console.log(`\n  erreurs JavaScript : ${crashes.slice(0, 3).join(" | ")}`);
+  console.log(`\n  JavaScript errors: ${crashes.slice(0, 3).join(" | ")}`);
   fails += crashes.length;
 }
 
 await browser.close();
 console.log();
 if (fails) {
-  console.error(`  ${fails} cas en echec\n`);
+  console.error(`  ${fails} case(s) failed\n`);
   process.exit(1);
 }
-console.log("  aucun contenu perdu lors de l'aller-retour\n");
+console.log("  no content lost in the round trip\n");
