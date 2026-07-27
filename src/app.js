@@ -186,15 +186,19 @@ const btnSave = button("Enregistrer", "Enregistrer (Ctrl+S)", doSave);
 const btnSaveAs = button("Enregistrer sous", "Enregistrer sous (Ctrl+Maj+S)", doSaveAs);
 const btnNew = button("Nouveau", "Vider l'editeur", doNew);
 
+// « Source » plutot que « Editeur » : le voisin immediat est un bouton
+// d'edition, et deux libelles aussi proches pour deux notions differentes --
+// une disposition et un mode -- ne pouvaient que preter a confusion.
 const viewButtons = {
-  editor: button("Editeur", "Afficher uniquement la source", () => setView("editor")),
+  editor: button("Source", "Afficher uniquement le texte source", () => setView("editor")),
   split: button("Partage", "Afficher la source et le rendu", () => setView("split")),
-  preview: button("Apercu", "Afficher uniquement le rendu", () => setView("preview")),
+  preview: button("Rendu", "Afficher uniquement le document rendu", () => setView("preview")),
 };
-const segView = el("div", { class: "seg", role: "group", "aria-label": "Mode d'affichage" },
+const segView = el("div", { class: "seg", role: "group", "aria-label": "Disposition" },
   viewButtons.editor, viewButtons.split, viewButtons.preview);
 
-const btnRich = button("Edition", "Ecrire directement dans le document rendu", toggleRich);
+const btnRich = button("Modifier le rendu",
+  "Ecrire directement dans le document rendu", toggleRich);
 
 const btnExport = button("Exporter HTML", "Enregistrer le rendu en HTML autonome", doExportHtml);
 const btnStandalone = button("Telecharger l'app",
@@ -219,7 +223,9 @@ const toolbar = el("header", { class: "tb" },
   el("div", { class: "tb-sep" }),
   btnNew,
   el("div", { class: "tb-sep" }),
-  segView, btnRich,
+  segView,
+  el("div", { class: "tb-sep" }),
+  btnRich,
   el("div", { class: "tb-sep" }),
   btnExport, btnStandalone,
   el("div", { class: "tb-spacer" }),
@@ -514,13 +520,48 @@ function updateRibbon(status = rich.status()) {
  * Modes d'affichage, theme, redimensionnement
  * ======================================================================== */
 
+/** Le rendu est-il reellement a l'ecran ? En vue « Source » il est masque. */
+function richPaneVisible() {
+  return state.richMode && panes.dataset.view !== "editor";
+}
+
+/**
+ * Aligne l'interface sur la disposition et le mode courants.
+ *
+ * Disposition et mode d'edition sont deux reglages independants, et aucun ne
+ * modifie l'autre : quand le rendu n'est pas affiche, le bouton est simplement
+ * desactive. Le detourner pour changer la disposition reviendrait a defaire un
+ * choix explicite de l'utilisateur, sans le retablir ensuite.
+ */
+function applyPaneMode() {
+  const sourceOnly = panes.dataset.view === "editor";
+
+  btnRich.disabled = sourceOnly;
+  btnRich.setAttribute("aria-pressed", String(state.richMode));
+  btnRich.title = sourceOnly
+    ? "Affichez le rendu (Partage ou Rendu) pour pouvoir le modifier"
+    : "Ecrire directement dans le document rendu";
+
+  const showRich = richPaneVisible();
+  ribbon.classList.toggle("hidden", !showRich);
+  preview.classList.toggle("hidden", state.richMode);
+  richHost.classList.toggle("hidden", !state.richMode);
+  if (showRich) updateRibbon();
+}
+
 function setView(mode) {
+  // Le rendu va disparaitre : ses modifications en attente doivent redescendre
+  // dans la source avant qu'il ne soit plus visible.
+  if (mode === "editor" && state.richMode) flushRich();
+
   panes.dataset.view = mode;
   for (const [k, b] of Object.entries(viewButtons)) {
     b.setAttribute("aria-pressed", String(k === mode));
   }
   store.set(KEY.view, mode);
   sbMode.textContent = { editor: "Source", split: "Vue partagee", preview: "Rendu" }[mode];
+
+  applyPaneMode();
   if (mode !== "preview") view.requestMeasure();
   if (mode !== "editor" && state.richMode) pushToRich();
 }
@@ -537,26 +578,22 @@ function setRichMode(on) {
 
   state.richMode = on;
   store.set(KEY.rich, on ? "1" : "0");
-
-  btnRich.setAttribute("aria-pressed", String(on));
-  ribbon.classList.toggle("hidden", !on);
-  preview.classList.toggle("hidden", on);
-  richHost.classList.toggle("hidden", !on);
+  applyPaneMode();
 
   if (on) {
     syncing = true;
     rich.setMarkdown(text());
     syncing = false;
-    if (panes.dataset.view === "editor") setView("split");
-    rich.focus();
     updateRibbon();
+    rich.focus();
   } else {
     render();
+    view.focus();
   }
 
   flash(on
-    ? "Edition du rendu active - la source sera regeneree"
-    : "Retour a l'apercu en lecture");
+    ? "Modification du rendu active - la source sera regeneree"
+    : "Retour au rendu en lecture seule");
 }
 
 function setTheme(theme) {
@@ -890,8 +927,8 @@ function showAbout() {
     </ul>
 
     <h3>Les deux modes d'edition</h3>
-    <p>Le bouton <b>Edition</b> rend le document affiche a droite directement
-    modifiable, avec un ruban de mise en forme. Le texte source est alors
+    <p>Le bouton <b>Modifier le rendu</b> rend le document affiche a droite
+    directement modifiable, avec un ruban de mise en forme. Le texte source est alors
     <em>regenere</em> a partir du document : la mise en forme est preservee,
     mais vos conventions d'ecriture sont normalisees (<code>*</code> devient
     <code>-</code>, les titres soulignes deviennent des <code>#</code>). Tant
@@ -965,18 +1002,11 @@ if (savedSplit) panes.style.setProperty("--split", savedSplit);
 
 refreshDraftUi();
 updateStatus();
-render();
 
-// `setRichMode` compare a l'etat courant : on part de false pour que la
-// preference enregistree soit reellement appliquee.
-if (state.richMode) {
-  state.richMode = false;
-  setRichMode(true);
-} else {
-  btnRich.setAttribute("aria-pressed", "false");
-  ribbon.classList.add("hidden");
-  view.focus();
-}
+// `setView` a deja applique la disposition, le mode et, le cas echeant, pousse
+// le document vers l'editeur riche.
+render();
+if (richPaneVisible()) rich.focus(); else view.focus();
 
 if (!hasFSA) {
   flash("Ce navigateur n'a pas l'API fichier : l'enregistrement passe par un telechargement");

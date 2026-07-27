@@ -83,7 +83,7 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 - **Édition de la source** : CodeMirror 6, coloration syntaxique du Markdown,
   blocs de code colorés selon leur langage, prolongement automatique des listes,
   numéros de ligne, annuler/rétablir.
-- **Édition du rendu** : bouton **Édition**, et le document mis en forme devient
+- **Édition du rendu** : bouton **Modifier le rendu**, et le document mis en forme devient
   la surface de saisie, avec un ruban : gras, italique, barré, code, niveaux de
   titre, listes à puces / numérotées / de tâches, citation, séparateur, lien,
   image, tableau (avec ajout et suppression de lignes et colonnes). Les
@@ -91,7 +91,10 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
   `- ` une liste, ` ``` ` un bloc de code.
 - **Aperçu en direct** : rendu GFM (tableaux, listes de tâches, barré) assaini
   par DOMPurify, défilement synchronisé, séparateur ajustable.
-- **Trois dispositions** : source seule, vue partagée, rendu seul.
+- **Trois dispositions** : source seule, vue partagée, rendu seul. La
+  disposition et le mode d'édition sont indépendants : en vue « Source », le
+  bouton **Modifier le rendu** est simplement désactivé — il ne change jamais la
+  disposition choisie.
 - **Fichiers locaux** : `Ouvrir` / `Enregistrer` écrivent de vrais fichiers `.md`
   via l'API File System Access (Chrome, Edge). Sur Firefox et Safari, repli
   automatique sur import de fichier et téléchargement.
@@ -107,7 +110,7 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 | `Ctrl`+`Maj`+`S` | Enregistrer sous |
 | `Ctrl`+`Z` / `Ctrl`+`Y` | Annuler / rétablir |
 
-Dans le rendu, en mode Édition :
+Dans le rendu, quand **Modifier le rendu** est actif :
 
 | Raccourci | Action |
 | --- | --- |
@@ -139,8 +142,8 @@ Markdown → HTML est direct ; le chemin inverse ne l'est pas. Quand vous édite
 dans le rendu, la source n'est pas modifiée par retouches successives : elle est
 **régénérée** depuis le document. Trois conséquences, par ordre d'importance :
 
-1. **Tant que vous n'activez pas le mode Édition, la source reste intacte au
-   caractère près.** Le mode lecture ne réécrit jamais rien.
+1. **Tant que le bouton « Modifier le rendu » reste inactif, la source est
+   intacte au caractère près.** Le mode lecture ne réécrit jamais rien.
 2. **Une fois activé, vos conventions d'écriture sont normalisées.** `*` devient
    `-` pour les puces, les titres soulignés deviennent des `#`, l'indentation des
    listes est uniformisée. Le sens est préservé, la forme est standardisée.
@@ -195,7 +198,7 @@ produite si l'un de ces points casse.
 ```bash
 npm run dev &
 npm install --no-save puppeteer
-node test/browser.mjs      # 70 tests de bout en bout
+node test/browser.mjs      # 74 tests de bout en bout
 node test/roundtrip.mjs    # 33 constructions Markdown, aller-retour
 ```
 
@@ -206,7 +209,7 @@ neutralise scripts, `onerror`, `javascript:`, iframes et formulaires ; que
 l'édition du rendu se répercute dans la source et réciproquement ; et que le
 fichier autonome démarre en `file://` sans emporter le document en cours.
 
-`roundtrip.mjs` est le filet de sécurité du mode Édition : pour chaque
+`roundtrip.mjs` est le filet de sécurité de ce mode : pour chaque
 construction Markdown, il compare le rendu avant et après un aller-retour, et
 vérifie qu'un second passage ne modifie plus la source.
 

@@ -148,10 +148,22 @@ input:focus-visible {
 
 .seg > button:first-child { border-left: 0; }
 
+/* Un bouton bascule doit se voir actif au premier coup d'oeil. La regle couvre
+   la barre d'outils entiere, et pas seulement les groupes segmentes : un
+   simple bouton bascule se confondait sinon avec sa couleur de survol. */
+.tb button[aria-pressed="true"],
 .seg > button[aria-pressed="true"] {
   background: var(--accent);
   color: var(--accent-fg);
+  border-color: var(--accent);
 }
+
+.tb button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.tb button:disabled:hover { background: var(--bg); }
 
 .chk {
   display: inline-flex;

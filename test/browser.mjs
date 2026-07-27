@@ -189,9 +189,9 @@ ok("les imports dynamiques distants sont bloques", blocked("https://example.test
 console.log("\n--- interface ---");
 const display = (sel) => page.$eval(sel, (e) => getComputedStyle(e).display);
 
-await (await btn("Editeur")).click();
+await (await btn("Source")).click();
 ok("mode editeur : l'apercu est masque", (await display(".pane-preview")) === "none");
-await (await btn("Apercu")).click();
+await (await btn("Rendu")).click();
 ok("mode apercu : l'editeur est masque", (await display(".pane-editor")) === "none");
 await (await btn("Partage")).click();
 ok("mode partage : les deux panneaux sont visibles",
@@ -270,9 +270,39 @@ async function retypeRich(content) {
   await wait(500);
 }
 
+// --- disposition et mode d'edition sont independants ---
+// Le bouton ne doit jamais modifier la disposition choisie : quand le rendu
+// n'est pas affiche, il est desactive, pas detourne.
+await (await btn("Source")).click();
+await wait(300);
+ok("en vue Source, le bouton de modification est desactive",
+  (await (await btn("Modifier le rendu")).evaluate((b) => b.disabled)) === true);
+ok("le ruban reste masque en vue Source",
+  (await page.$eval(".rb", (e) => getComputedStyle(e).display)) === "none");
+
+await (await btn("Partage")).click();
+await wait(300);
+ok("le bouton redevient actif des que le rendu est affiche",
+  (await (await btn("Modifier le rendu")).evaluate((b) => b.disabled)) === false);
+
 await retype("# Depart\n\nTexte initial.");
-await (await btn("Edition")).click();
+const viewBefore = await page.$eval(".panes", (e) => e.dataset.view);
+await (await btn("Modifier le rendu")).click();
 await wait(400);
+
+ok("activer la modification ne change pas la disposition",
+  (await page.$eval(".panes", (e) => e.dataset.view)) === viewBefore, viewBefore);
+
+// L'etat actif doit se lire au premier coup d'oeil, donc arborer la meme
+// couleur que l'option de disposition selectionnee.
+ok("le bouton actif se distingue visuellement", await page.evaluate(() => {
+  const toggle = [...document.querySelectorAll(".tb button")]
+    .find((b) => b.textContent === "Modifier le rendu");
+  const selected = document.querySelector('.seg button[aria-pressed="true"]');
+  const c = getComputedStyle(toggle);
+  return c.backgroundColor === getComputedStyle(selected).backgroundColor &&
+    c.backgroundColor !== getComputedStyle(document.body).backgroundColor;
+}));
 
 ok("le ruban de mise en forme apparait",
   (await page.$eval(".rb", (e) => getComputedStyle(e).display)) !== "none");
@@ -373,10 +403,13 @@ ok("l'edition voisine a bien eu lieu", afterEdit.includes("Avant !"), afterEdit)
 
 // --- sortir du mode riche ne perd rien ---
 await retypeRich("Contenu final du rendu");
-await (await btn("Edition")).click();
+const viewBeforeExit = await page.$eval(".panes", (e) => e.dataset.view);
+await (await btn("Modifier le rendu")).click();
 await wait(400);
 ok("quitter le mode riche repercute les dernieres modifications",
   (await sourceText()).includes("Contenu final du rendu"), await sourceText());
+ok("desactiver la modification ne change pas non plus la disposition",
+  (await page.$eval(".panes", (e) => e.dataset.view)) === viewBeforeExit, viewBeforeExit);
 ok("l'apercu en lecture revient",
   (await page.$eval("#preview", (e) => getComputedStyle(e).display)) !== "none");
 ok("le ruban disparait",
