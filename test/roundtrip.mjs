@@ -65,6 +65,15 @@ const CASES = [
   ["link in a table", "| col |\n| --- |\n| [link](https://example.com) |\n"],
   ["task with emphasis", "- [x] **important** task\n"],
   ["html in a list", "- item with <kbd>Ctrl</kbd>\n"],
+
+  // Overlapping marks: the schema's mark order decides which one wraps the
+  // other. With `strong` ahead of `link`, a partially emphasised link came back
+  // as two separate links.
+  ["partially bold link", "[**bold** and plain](https://example.com)\n"],
+  ["partially italic link", "[*em* and plain](https://example.com)\n"],
+  ["fully bold link", "[**all bold**](https://example.com)\n"],
+  ["code inside a link", "[`code` text](https://example.com)\n"],
+  ["struck link", "[~~gone~~ text](https://example.com)\n"],
 ];
 
 /* --- Bundle the engine, run it in the browser ---------------------------- */

@@ -197,16 +197,25 @@ const htmlInline = {
   parseDOM: [{ tag: "span.raw-html-inline", getAttrs: (dom) => ({ content: dom.textContent }) }],
 };
 
+// Mark order decides nesting when marks overlap: the earliest in the schema is
+// the outermost. The base order puts `strong` before `link`, which turns
+// `[**bold** text](url)` into two separate links -- the bold part wrapping its
+// own link, then a second link for the rest. Moving `link` to the front keeps
+// it outside, so a partially emphasised link stays one link.
+const marks = baseSchema.spec.marks
+  .addToEnd("strikethrough", {
+    parseDOM: [{ tag: "s" }, { tag: "del" }, { tag: "strike" }],
+    toDOM: () => ["s", 0],
+  })
+  .addToStart("link", baseSchema.spec.marks.get("link"));
+
 export const schema = new Schema({
   nodes: baseSchema.spec.nodes
     .update("list_item", listItem)
     .append(tables)
     .addToEnd("html_block", htmlBlock)
     .addToEnd("html_inline", htmlInline),
-  marks: baseSchema.spec.marks.addToEnd("strikethrough", {
-    parseDOM: [{ tag: "s" }, { tag: "del" }, { tag: "strike" }],
-    toDOM: () => ["s", 0],
-  }),
+  marks,
 });
 
 /* ===========================================================================

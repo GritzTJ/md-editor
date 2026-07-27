@@ -181,6 +181,43 @@ and that the source stops changing on the next pass.
 
 ---
 
+## Markdown coverage
+
+Measured against the [Markdown Guide](https://www.markdownguide.org/), construct
+by construct, by `test/syntax.mjs`. Each one is checked twice: that the preview
+renders it as documented, and that it survives being edited in the rendered view.
+
+**Basic syntax — all 43 constructs, rendered and round-tripped.** Headings (hash
+and setext), paragraphs, all three line-break forms, bold and italic in both
+asterisk and underscore forms, blockquotes including nested ones, ordered and
+unordered lists in every delimiter, nesting, inline code, indented code blocks,
+all three horizontal-rule forms, inline / angle-bracket / reference-style links,
+images, escapes, and raw HTML.
+
+**Extended syntax — 7 of 15.** Supported: tables, table alignment, fenced code
+blocks, syntax-highlighting language tags, strikethrough, task lists, and
+disabling automatic linking with a code span.
+
+Not implemented, each rendered as literal text:
+
+| Construct | Example |
+| --- | --- |
+| Footnotes | `Text.[^1]` |
+| Heading IDs | `### Heading {#custom-id}` |
+| Definition lists | `Term` / `: Definition` |
+| Emoji shortcodes | `:tent:` |
+| Highlight | `==important==` |
+| Subscript | `H~2~O` |
+| Superscript | `X^2^` |
+| Automatic URL linking | a bare `https://example.com` |
+
+The first seven are optional markdown-it plugins and could be added; each would
+also need a node or mark in the ProseMirror schema, or editing the preview would
+destroy it. Automatic URL linking is a deliberate choice rather than a gap:
+`linkify` is off, so nothing in your text is silently turned into a link.
+
+---
+
 ## Known limitations
 
 - **Remote images do not display.** `![](https://…)` is blocked by `img-src`.
@@ -221,6 +258,7 @@ npm install --no-save puppeteer
 node test/browser.mjs      # 77 end-to-end tests
 node test/roundtrip.mjs    # 33 Markdown constructs, round-tripped
 node test/buttons.mjs      # 41 controls, one assertion each
+node test/syntax.mjs       # 58 Markdown Guide constructs
 ```
 
 `browser.mjs` drives a real Chrome against the served application. It checks
@@ -260,6 +298,7 @@ build.mjs           esbuild bundle -> single HTML file + CSP + digests
 verify.mjs          checks on the produced file
 test/browser.mjs    end-to-end tests
 test/roundtrip.mjs  Markdown <-> ProseMirror round-trip fidelity
+test/syntax.mjs     compliance with the Markdown Guide
 test/buttons.mjs    every control, one assertion each
 nginx/default.conf  security headers, GET/HEAD only
 Dockerfile          multi-stage build -> unprivileged nginx
