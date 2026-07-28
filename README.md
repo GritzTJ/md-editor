@@ -71,7 +71,11 @@ docker compose up -d
 ```
 
 The image is published for `linux/amd64` and `linux/arm64`. It exposes port
-**8080** and runs as **uid 101**, never root.
+**8080** and runs as **uid 101**, never root. It weighs **14.5 MB**, of which
+1.7 MB is the application: the runtime is `nginx:alpine-slim`, which ships 21
+packages and no dynamic module, rather than `alpine`'s 71 packages and twelve
+modules — no XSLT engine, no image decoders, no njs, no X11 client libraries in
+a container that serves one static file.
 
 ### Verifying where the image came from
 

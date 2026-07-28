@@ -31,7 +31,18 @@ RUN npm run build && node verify.mjs
 # --- stage 2: runtime ---------------------------------------------------------
 # Unprivileged image: nginx runs as uid 101, listens on 8080, and needs no
 # special capability.
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+#
+# `alpine-slim`, not `alpine`. The difference is not the 41 MB -- nobody
+# notices those -- it is what stops being shipped: twelve dynamic modules
+# (geoip, image_filter, xslt, and njs, which runs JavaScript inside nginx) and
+# fifty packages, among them libxml2, libxslt, libgd, libjpeg-turbo, libpng,
+# libtiff and a set of X11 client libraries dragged in by libgd.
+#
+# None of it is reachable from this configuration, which serves one static file
+# and a health probe. But each one shows up in a vulnerability scan and forces a
+# rebuild when it moves. For a project whose argument is that you can audit it,
+# shipping code that is never called is hard to defend.
+FROM nginxinc/nginx-unprivileged:1.29-alpine-slim
 
 LABEL org.opencontainers.image.title="md-editor" \
       org.opencontainers.image.description="A Markdown editor that runs entirely in the browser: the server never sees the content." \
