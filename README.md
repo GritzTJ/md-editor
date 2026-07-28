@@ -101,6 +101,9 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 - **Local files**: `Open` / `Save` write real `.md` files through the File
   System Access API. Elsewhere, an automatic fallback to file import and
   download (see the caveat below).
+- **Copy code**: hovering a code block in the preview reveals a **Copy** button.
+  It uses the Clipboard API in a secure context and falls back to `execCommand`
+  elsewhere, so unlike `Save` it does not disappear on `http://<IP>`.
 - **Outline**: a toggleable panel listing the document's headings, built on the
   anchors already generated. It reads whichever rendered surface is on screen,
   so it works the same in both modes.
@@ -157,6 +160,13 @@ Firefox and Safari do not implement the API at all and behave the same way.
 
 If direct file writing matters to you, reach the app over HTTPS or through
 `localhost`.
+
+The **Copy** button on code blocks depends on the same secure-context rule —
+`navigator.clipboard` is absent on `http://<IP>` too — but it does not go away
+there: it falls back to a hidden textarea and `document.execCommand("copy")`,
+which is deprecated but is the only thing that still works on such an origin.
+Both paths are covered by `test/buttons.mjs`, the fallback by removing the
+Clipboard API from the page first.
 
 ---
 
@@ -311,7 +321,7 @@ npm run dev &
 npm install --no-save puppeteer
 node test/browser.mjs      # 82 end-to-end tests
 node test/roundtrip.mjs    # 62 Markdown constructs, round-tripped
-node test/buttons.mjs      # 54 controls and behaviours, one assertion each
+node test/buttons.mjs      # 61 controls and behaviours, one assertion each
 node test/syntax.mjs       # 62 Markdown Guide constructs, render + round trip
 ```
 

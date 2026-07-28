@@ -563,6 +563,7 @@ function scheduleRender() {
 function render() {
   if (state.editing) return; // the read-only pane is hidden
   preview.innerHTML = renderMarkdown(text());
+  addCopyButtons();
   refreshOutline();
 }
 
@@ -1109,6 +1110,78 @@ async function insertImagesAsMarkdown(files, from, to) {
 }
 
 /* ===========================================================================
+ * Copying code blocks
+ * ======================================================================== */
+
+/**
+ * Copy text, whatever the origin allows.
+ *
+ * `navigator.clipboard` exists only in a secure context -- the same rule that
+ * strips the File System Access API on `http://<IP>` and makes "Save as" fall
+ * back to a download there. Rather than let the button quietly disappear on
+ * exactly the origin where copying by hand is most tedious, it falls back to
+ * `execCommand`, deprecated but still the only thing that works on a plain-HTTP
+ * origin.
+ *
+ * Both paths are local to the tab: copying moves text to the system clipboard,
+ * which is the user's own, and needs no permission the CSP is concerned with.
+ */
+async function copyToClipboard(text) {
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch { /* refused or unavailable: try the fallback below */ }
+  }
+
+  const carrier = el("textarea", { readonly: "" });
+  carrier.value = text;
+  // Off screen rather than hidden: execCommand copies the current selection,
+  // and an element with `display: none` cannot hold one.
+  carrier.style.cssText = "position:fixed;left:-9999px;top:0";
+  document.body.append(carrier);
+
+  const previous = document.activeElement;
+  carrier.select();
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch { copied = false; }
+  carrier.remove();
+  if (previous && previous.focus) previous.focus();
+  return copied;
+}
+
+/**
+ * Put a copy button on every code block in the preview.
+ *
+ * The preview only. The rendered editor's DOM belongs to ProseMirror, which
+ * rebuilds it from the document; a button injected there would be a node the
+ * editor never put in its own tree, and the usual outcome is a cursor that
+ * lands inside it. Code is selectable there like any other text.
+ *
+ * Rebuilt wholesale on every render, which is what `render()` does to the
+ * preview anyway. The buttons never reach an export: `doExportHtml` renders the
+ * Markdown afresh rather than copying this DOM.
+ */
+function addCopyButtons() {
+  for (const pre of preview.querySelectorAll("pre")) {
+    const code = pre.querySelector("code");
+    if (!code) continue;
+
+    const btn = button("Copy", "Copy this code block", async () => {
+      const copied = await copyToClipboard(code.textContent);
+      btn.textContent = copied ? "Copied" : "Failed";
+      btn.classList.toggle("copy-failed", !copied);
+      setTimeout(() => {
+        btn.textContent = "Copy";
+        btn.classList.remove("copy-failed");
+      }, 1200);
+    }, "copy-btn");
+
+    pre.append(btn);
+  }
+}
+
+/* ===========================================================================
  * About dialog
  * ======================================================================== */
 
@@ -1175,6 +1248,12 @@ function showAbout() {
     draft</b> checkbox writes the document in clear text into this browser's
     <code>localStorage</code> &mdash; handy on a personal machine, best avoided
     on a shared one.</p>
+
+    <h3>Copying code</h3>
+    <p>Hover a code block in the preview for a <b>Copy</b> button. It uses the
+    Clipboard API where the origin allows it and an older fallback everywhere
+    else, so unlike <b>Save</b> it keeps working over plain HTTP. The text goes
+    to your system clipboard and nowhere else.</p>
 
     <h3>Images and maths</h3>
     <p>Paste or drop an image file and it is <b>encoded into the document</b> as

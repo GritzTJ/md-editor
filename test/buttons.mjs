@@ -206,6 +206,52 @@ await click("Back to split");
 await click("Outline");
 ok("Outline hides again", !(await outlineShown()));
 
+/* ========================= copying a code block ========================= */
+console.log("\n--- copying a code block ---");
+
+await browser.defaultBrowserContext().overridePermissions(new URL(TARGET).origin,
+  ["clipboard-read", "clipboard-write"]);
+
+const CODE = 'const secret = "value";\nconsole.log(secret);';
+await setSource("Text.\n\n```js\n" + CODE + "\n```\n");
+
+const copyButtons = await page.$$("#preview pre .copy-btn");
+ok("a copy button is added to the code block", copyButtons.length === 1,
+  String(copyButtons.length));
+
+ok("it is hidden until the block is hovered",
+  (await page.$eval("#preview pre .copy-btn", (e) => getComputedStyle(e).opacity)) === "0");
+
+await page.click("#preview pre .copy-btn");
+await wait(400);
+ok("clicking it reports success",
+  (await page.$eval("#preview pre .copy-btn", (e) => e.textContent)) === "Copied",
+  await page.$eval("#preview pre .copy-btn", (e) => e.textContent));
+
+const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+ok("the code block really reaches the clipboard", clipboard === CODE + "\n",
+  JSON.stringify(clipboard));
+
+// The secure-context path is gone on `http://<IP>`, exactly as for the File
+// System Access API. The button has to keep working there, not vanish.
+await page.evaluate(() => {
+  Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+});
+await setSource("Text.\n\n```js\n" + CODE + "\n```\n");
+await page.click("#preview pre .copy-btn");
+await wait(400);
+ok("it still works without the Clipboard API",
+  (await page.$eval("#preview pre .copy-btn", (e) => e.textContent)) === "Copied",
+  await page.$eval("#preview pre .copy-btn", (e) => e.textContent));
+
+// Restore the real API for the rest of the run. Reloading would be the obvious
+// way, but the page guards against losing unsaved changes and the confirmation
+// dialog blocks the navigation; deleting the own property re-exposes the
+// getter on Navigator.prototype and costs nothing.
+await page.evaluate(() => { delete navigator.clipboard; });
+ok("the Clipboard API is restored for the rest of the run",
+  await page.evaluate(() => Boolean(navigator.clipboard)));
+
 /* ========================= pasting an image ========================= */
 console.log("\n--- pasting an image ---");
 
@@ -357,6 +403,13 @@ answers = ["\\int_0^1 x\\,dx"];
 await click("Math block");
 const blockMaths = await splitAndRead();
 ok("Math block", /\$\$\n\\int_0\^1 x\\,dx\n\$\$/.test(blockMaths), JSON.stringify(blockMaths));
+
+// The rendered editor is ProseMirror's DOM, and nothing is injected into it:
+// a stray node there is how you get a cursor landing inside a button.
+await editRendered("```js\nconst x = 1;\n```");
+ok("no copy button is injected into the rendered editor",
+  (await page.$$("#rich .copy-btn")).length === 0);
+await click("Back to split");
 
 // The formula has to render, not merely serialise.
 await editRendered("$E = mc^2$");

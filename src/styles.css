@@ -667,6 +667,40 @@ li.ProseMirror-selectednode::after {
   .panes.editing { grid-template-rows: 1fr; }
 }
 
+/* ------------------------------ copy button ------------------------------ */
+
+/* Anchors the button; the code block is itself the scroll container, so the
+   button travels with the code and needs no repositioning. */
+#preview pre { position: relative; }
+
+.copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .12s ease;
+  /* Kept out of the document's text: selecting the whole preview and copying
+     it must not pick up the word "Copy" between the code blocks. */
+  user-select: none;
+}
+
+/* Revealed on hover, and on keyboard focus -- otherwise the button would be
+   reachable by Tab while staying invisible. */
+#preview pre:hover .copy-btn,
+.copy-btn:focus-visible { opacity: 1; }
+
+.copy-btn:hover { background: var(--bg-inset); color: var(--fg); }
+.copy-btn.copy-failed { color: var(--danger); border-color: var(--danger); }
+
 /* ------------------------------ maths ------------------------------ */
 
 /* KaTeX's own stylesheet is inlined ahead of this one at build time, fonts and
@@ -794,7 +828,7 @@ li.ProseMirror-selectednode::after {
   /* `.pane.pane-editor` rather than `.pane-editor`: the reset below sets
      `display: block !important` on every `.pane`, and at equal specificity the
      later rule wins -- the source pane would print. */
-  .tb, .rb, .sb, .divider, .pane.pane-editor, .sheet, .outline {
+  .tb, .rb, .sb, .divider, .pane.pane-editor, .sheet, .outline, .copy-btn {
     display: none !important;
   }
 
