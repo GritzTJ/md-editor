@@ -179,6 +179,13 @@ const html = `<!doctype html>
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="A Markdown editor that runs entirely in the browser.">
+<!-- An empty icon, declared so the browser stops going after /favicon.ico.
+     Firefox applies img-src to that automatic request and reports a violation
+     on every load; Chromium and WebKit do not. Nothing leaked either way -- the
+     request is to our own origin and Firefox blocked it before sending -- but a
+     policy violation in the console of a project that sells its policy is worth
+     the thirty bytes it costs to avoid. -->
+<link rel="icon" href="data:,">
 <title>Markdown editor</title>
 <style id="app-css">${css}</style>
 </head>

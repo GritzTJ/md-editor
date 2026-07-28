@@ -88,8 +88,39 @@ jobs:
             dist/index.html
             dist/index.html.sha256
 
+  # Blink, Gecko and WebKit, in one job. Network containment is enforced by the
+  # browser, so a claim checked on one engine is a claim checked on one engine.
+  # Separate from `verify` because it pulls three browsers and their system
+  # libraries, and there is no reason to make the fast checks wait for that.
+  crossbrowser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+
+      - name: Install the engines
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run the cross-engine suite
+        run: |
+          set -euo pipefail
+          node build.mjs --serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/ >/dev/null && break || sleep 1
+          done
+          node test/crossbrowser.mjs
+
   publish:
-    needs: verify
+    needs: [verify, crossbrowser]
     runs-on: ubuntu-latest
     permissions:
       contents: read

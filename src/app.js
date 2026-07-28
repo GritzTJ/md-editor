@@ -934,6 +934,7 @@ function doExportHtml() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<link rel="icon" href="data:,">
 <title>${escapeHtml(title)}</title>
 <style>
 ${css}
@@ -975,6 +976,7 @@ function standaloneHtml() {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${csp.replace(/"/g, "&quot;")}">
 <meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
 <title>Markdown editor</title>
 <style id="app-css">${css}</style>
 </head>

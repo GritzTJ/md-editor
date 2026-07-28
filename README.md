@@ -156,7 +156,9 @@ expose exclusively in a *secure context*.
 Served over plain HTTP on an IP address, the API is absent entirely and both
 buttons fall back to downloading a copy. `Save as` then asks for a file name, so
 it still differs from `Save`, but nothing is written back to the original file.
-Firefox and Safari do not implement the API at all and behave the same way.
+Firefox and Safari do not implement the API at all and behave the same way. That
+is measured, not assumed: `test/crossbrowser.mjs` reports the API absent on
+Gecko and WebKit and checks that **Save** produces a download there.
 
 If direct file writing matters to you, reach the app over HTTPS or through
 `localhost`.
@@ -336,6 +338,37 @@ node test/buttons.mjs      # 61 controls and behaviours, one assertion each
 node test/syntax.mjs       # 62 Markdown Guide constructs, render + round trip
 ```
 
+### Three engines
+
+The four suites above drive Chromium. But network containment is enforced by the
+browser, not by this code, so a claim checked on one engine is a claim checked on
+one engine. `test/crossbrowser.mjs` runs the load-bearing subset — 34 checks — on
+**Blink, Gecko and WebKit** through Playwright:
+
+```bash
+npm install --no-save playwright
+npx playwright install --with-deps chromium firefox webkit
+node test/crossbrowser.mjs
+ENGINES=firefox node test/crossbrowser.mjs     # one engine only
+```
+
+Last measured: **34/34 on all three** — Chromium 151, Firefox 153, WebKit 26.5.
+Every egress route (`fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`,
+`sendBeacon`, dynamic `import`, remote image) is refused on every engine;
+sanitisation, KaTeX with its fonts, the preview round trip, the copy button and
+the print stylesheet all behave identically. The one documented divergence shows
+up in the table: Chromium has the File System Access API, Gecko and WebKit do
+not and take the download fallback.
+
+**This is not Safari.** Safari only runs on macOS; what runs here is WebKit, the
+engine underneath it, in Playwright's Linux build. Same rendering and security
+code, different surrounding application and release cadence. A pass is strong
+evidence for Safari, not proof of it.
+
+Chromium is in the suite on purpose even though puppeteer already covers it: a
+check that fails on Gecko and WebKit but passes on Blink is a real difference,
+and one that fails on all three is usually a bug in the test.
+
 `browser.mjs` drives a real Chrome against the served application. It checks
 that the browser really does block `fetch`, WebSocket, `sendBeacon`, remote
 images and dynamic imports; that the preview neutralises scripts, `onerror`,
@@ -375,6 +408,7 @@ test/browser.mjs    end-to-end tests
 test/roundtrip.mjs  Markdown <-> ProseMirror round-trip fidelity
 test/syntax.mjs     compliance with the Markdown Guide
 test/buttons.mjs    every control, one assertion each
+test/crossbrowser.mjs  the same claims on Blink, Gecko and WebKit
 nginx/default.conf  security headers, GET/HEAD only
 Dockerfile          multi-stage build -> unprivileged nginx
 ```
