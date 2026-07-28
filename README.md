@@ -310,9 +310,20 @@ node verify.mjs   # checks the built file
 
 `verify.mjs` inspects the file actually produced, not the sources: that the
 script is still valid once extracted from the HTML, that the CSP digest matches,
-that no external resource is referenced and that no network primitive appears in
-the bundle. It is replayed during the image build, so no image can be produced
-if any of those break.
+that no external resource is referenced, and that neither a network primitive
+nor a runtime code generator appears in the bundle. It is replayed during the
+image build, so no image can be produced if any of those break.
+
+That last one is worth explaining. `script-src 'sha256-…'` permits exactly one
+script and nothing else — no `eval`, no `Function` constructor, no string-bodied
+timer — so a dependency that starts generating code at runtime would not fail
+the build, it would fail in the user's browser, silently, on whichever path
+happened to reach it. Several widely used libraries carry the lodash idiom
+`root = freeGlobal || freeSelf || Function("return this")()`, harmless only
+because `self` is defined first in a browser and the call is never evaluated.
+Two matching checks assert the CSP itself still refuses `'unsafe-eval'` and
+`'unsafe-inline'`, since the digest is only worth anything if nothing is allowed
+beside it.
 
 ### Browser tests
 

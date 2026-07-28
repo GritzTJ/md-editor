@@ -80,6 +80,14 @@ for (const directive of [
 check("CSP: img-src allows no remote scheme", /img-src (?:data:|blob:|\s)+(?:;|$)/.test(csp));
 check("CSP: no http(s) source allowed", !/https?:/.test(csp));
 
+// The digest in `script-src` is only worth something if nothing beside it is
+// allowed: either of these escape hatches would let injected code run despite
+// the digest, and `'unsafe-eval'` would also silently legitimise everything
+// section 6 rejects.
+const scriptSrc = (csp.match(/script-src[^;]*/) || [""])[0];
+check("CSP: script-src allows no 'unsafe-eval'", !scriptSrc.includes("'unsafe-eval'"));
+check("CSP: script-src allows no 'unsafe-inline'", !scriptSrc.includes("'unsafe-inline'"));
+
 /* --- 4. the document references no external resource --------------------- */
 
 // A single forgotten absolute URL (font, CDN, favicon) would be enough to tell
@@ -115,7 +123,35 @@ for (const [label, re] of netPatterns) {
   check(`the bundle does not call ${label}`, !re.test(js));
 }
 
-/* --- 6. rebuilding the standalone file stays valid ----------------------- */
+/* --- 6. no runtime code generation in the bundle ------------------------- */
+
+// `script-src 'sha256-…'` permits exactly one script and nothing else: no
+// `eval`, no `Function` constructor, no string-bodied timer. A dependency that
+// starts generating code at runtime therefore does not fail here -- it fails in
+// the user's browser, silently, on whichever path happens to reach it.
+//
+// This is not hypothetical. Several widely used libraries carry the lodash
+// idiom `root = freeGlobal || freeSelf || Function("return this")()`, harmless
+// only because `self` is defined first in a browser and the call is never
+// evaluated. Mermaid was rejected partly on this: three such calls, dormant
+// rather than absent. A build-time check is what turns "it happens to work"
+// into something we find out about.
+//
+// Same lookbehind as `fetch` above, and for the same reason: a name that merely
+// ends in `Function` -- `parseFunction(`, `callFunction(` -- is preceded by an
+// identifier character and is not the constructor.
+const evalPatterns = [
+  ["eval()", /(?<![.\w$])eval\s*\(/],
+  ["window.eval()", /\b(?:window|globalThis|self)\s*\.\s*eval\s*\(/],
+  ["new Function()", /new\s+Function\s*\(/],
+  ["the Function constructor", /(?<![.\w$])Function\s*\(/],
+  ["a string-bodied timer", /\bset(?:Timeout|Interval)\s*\(\s*["'`]/],
+];
+for (const [label, re] of evalPatterns) {
+  check(`the bundle does not use ${label}`, !re.test(js));
+}
+
+/* --- 7. rebuilding the standalone file stays valid ----------------------- */
 
 // Reproduces what doDownloadApp() does in the browser: if the digest survives
 // the round trip, the downloaded file will run.
@@ -124,7 +160,7 @@ const rebuiltJs = rebuilt.match(/<script id="app-js">([\s\S]*?)<\/script>/)[1];
 check("the rebuilt standalone file keeps a valid digest",
   createHash("sha256").update(rebuiltJs, "utf8").digest("base64") === declared);
 
-/* --- 7. the delivered body holds no content ------------------------------ */
+/* --- 8. the delivered body holds no content ------------------------------ */
 
 const body = html.match(/<body>([\s\S]*?)<div id="app">/);
 check("the application container ships empty", Boolean(body) && html.includes('<div id="app"></div>'));
