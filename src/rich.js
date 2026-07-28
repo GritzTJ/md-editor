@@ -214,11 +214,66 @@ function insertImage(state, dispatch) {
   // source, so any other URL is written into the Markdown but shows as a broken
   // image here. Better to state that than let the user find out.
   const src = window.prompt(
-    "Image URL — only data: URIs display here, remote images are blocked by the security policy:",
+    "Image URL — only data: URIs display here, remote images are blocked by the " +
+    "security policy. To use a local file, paste or drop it into the document instead:",
     "");
   if (!src) return false;
   const alt = window.prompt("Alternative text:", "") || null;
   return insertNode(nodes.image, { src, alt })(state, dispatch);
+}
+
+/* --- maths ---------------------------------------------------------------
+ * A formula is an atom: its TeX lives in an attribute, not as editable text,
+ * so what is rendered can never drift from what will be serialised. Editing it
+ * therefore goes through a prompt, the same route as a link URL.
+ * ---------------------------------------------------------------------- */
+
+function promptMath(initial, display) {
+  return window.prompt(
+    display
+      ? "Display maths — TeX, written as $$ … $$ in the source:"
+      : "Inline maths — TeX, written as $ … $ in the source:",
+    initial);
+}
+
+function insertMath(display) {
+  return (state, dispatch) => {
+    const tex = promptMath("", display);
+    if (!tex || !tex.trim()) return false;
+    return display
+      ? insertNode(nodes.math_block, { tex: tex.trim() })(state, dispatch)
+      : insertNode(nodes.math_inline, { tex: tex.trim(), display: false })(state, dispatch);
+  };
+}
+
+/** Image files carried by a paste or a drop, in the order given. */
+function imageFilesFrom(transfer) {
+  if (!transfer) return [];
+  return Array.from(transfer.files || []).filter((f) => f.type.startsWith("image/"));
+}
+
+/**
+ * Place pasted or dropped images.
+ *
+ * `embed` belongs to the application: it owns the size warnings and the status
+ * messages. This only puts what it returns where the user aimed. Each insert
+ * reads `view.state` afresh rather than reusing a position captured before the
+ * await -- the document may well have moved on while the file was being read.
+ */
+function handleImageFiles(view, embed, files, dropPos) {
+  (async () => {
+    if (dropPos != null) {
+      const $pos = view.state.doc.resolve(dropPos);
+      view.dispatch(view.state.tr.setSelection(TextSelection.near($pos)));
+    }
+    for (const file of files) {
+      const image = await embed(file);
+      if (!image) continue;
+      const node = nodes.image.create({ src: image.src, alt: image.alt });
+      view.dispatch(view.state.tr.replaceSelectionWith(node, false).scrollIntoView());
+    }
+    view.focus();
+  })();
 }
 
 /* ===========================================================================
@@ -275,8 +330,9 @@ function buildInputRules() {
  * @param {HTMLElement} options.parent   host container
  * @param {Function} options.onChange    called on every document change
  * @param {Function} options.onState     called when the button states change
+ * @param {Function} [options.embedImage] file -> Promise<{src, alt} | null>
  */
-export function createRichEditor({ parent, onChange, onState }) {
+export function createRichEditor({ parent, onChange, onState, embedImage }) {
   const keys = {
     "Mod-b": toggleMark(marks.strong),
     "Mod-i": toggleMark(marks.em),
@@ -333,6 +389,43 @@ export function createRichEditor({ parent, onChange, onState }) {
       view.updateState(next);
       if (tr.docChanged) onChange();
       onState(status());
+    },
+
+    // Image files are embedded; everything else falls through to ProseMirror's
+    // own paste and drop handling, which knows how to turn pasted HTML into
+    // schema-valid nodes.
+    handlePaste(v, event) {
+      if (!embedImage) return false;
+      const files = imageFilesFrom(event.clipboardData);
+      if (!files.length) return false;
+      handleImageFiles(v, embedImage, files, null);
+      return true;
+    },
+
+    handleDrop(v, event) {
+      if (!embedImage) return false;
+      const files = imageFilesFrom(event.dataTransfer);
+      if (!files.length) return false;
+      const at = v.posAtCoords({ left: event.clientX, top: event.clientY });
+      handleImageFiles(v, embedImage, files, at ? at.pos : null);
+      return true;
+    },
+
+    // Clicking a formula opens its TeX. `handleClickOn` hands over the node and
+    // its position directly, which beats working them back out of the DOM.
+    handleClickOn(v, pos, node, nodePos) {
+      if (node.type !== nodes.math_inline && node.type !== nodes.math_block) return false;
+
+      const display = node.type === nodes.math_block || node.attrs.display;
+      const tex = promptMath(node.attrs.tex, display);
+      if (tex === null) return true; // cancelled: the click is still consumed
+
+      // Emptying the box deletes the formula, which is the only way to get rid
+      // of one that no longer parses.
+      v.dispatch(tex.trim()
+        ? v.state.tr.setNodeMarkup(nodePos, null, { ...node.attrs, tex: tex.trim() })
+        : v.state.tr.delete(nodePos, nodePos + node.nodeSize));
+      return true;
     },
 
     handleDOMEvents: {
@@ -429,6 +522,8 @@ export function createRichEditor({ parent, onChange, onState }) {
       code: () => run(toggleMark(marks.code)),
       link: () => run(setLink),
       image: () => run(insertImage),
+      math: () => run(insertMath(false)),
+      mathBlock: () => run(insertMath(true)),
       bulletList: () => run(wrapInList(nodes.bullet_list)),
       orderedList: () => run(wrapInList(nodes.ordered_list)),
       taskList: () => run(toggleTaskList),

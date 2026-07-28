@@ -11,8 +11,9 @@ editable, with a formatting ribbon; **Back to split** returns you to writing
 source. The two surfaces are never on screen at once, which is what keeps their
 synchronisation down to a pair of transitions instead of a live negotiation.
 
-The application is a single file of ~1.0 MB (~350 kB compressed), with no
-runtime dependency on anything external.
+The application is a single file of ~1.6 MB (~700 kB compressed), with no
+runtime dependency on anything external. Roughly 620 kB of that is KaTeX and its
+twenty fonts — see [Maths](#maths) for what that buys and how to drop it.
 
 ---
 
@@ -83,7 +84,8 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 ## Features
 
 - **Source editing**: CodeMirror 6, Markdown syntax highlighting, code blocks
-  coloured per language, automatic list continuation, line numbers, undo/redo.
+  coloured per language, automatic list continuation, line numbers, undo/redo,
+  find and replace (`Ctrl`+`F`, regex and whole-word supported).
 - **Preview editing**: hit **Edit preview** and the formatted document becomes
   the writing surface, with a ribbon — bold, italic, strikethrough, code,
   heading levels, bulleted / numbered / task lists, block quote, divider, link,
@@ -99,8 +101,17 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 - **Local files**: `Open` / `Save` write real `.md` files through the File
   System Access API. Elsewhere, an automatic fallback to file import and
   download (see the caveat below).
-- **Exports**: the rendered document as standalone HTML, or the application
-  itself.
+- **Outline**: a toggleable panel listing the document's headings, built on the
+  anchors already generated. It reads whichever rendered surface is on screen,
+  so it works the same in both modes.
+- **Images**: paste or drop a file and it is embedded as a `data:` URI, which
+  makes the document self-contained. Above 512 kB the status bar says what the
+  encoding added; above 2 MB it asks first.
+- **Maths**: TeX between `$…$` or `$$…$$`, rendered by KaTeX with its fonts
+  inside the page.
+- **Exports**: the rendered document as standalone HTML, the application itself,
+  or **paper and PDF** — `Ctrl`+`P` prints the document alone, without a scrap
+  of interface, through the browser's own PDF writer.
 - **Light / dark theme**, following the system setting by default.
 
 ### Shortcuts
@@ -110,6 +121,8 @@ gh attestation verify oci://ghcr.io/GritzTJ/md-editor:latest --repo GritzTJ/md-e
 | `Ctrl`+`O` | Open a file |
 | `Ctrl`+`S` | Save |
 | `Ctrl`+`Shift`+`S` | Save as |
+| `Ctrl`+`F` | Find and replace in the source |
+| `Ctrl`+`P` | Print the document (or write it to PDF) |
 | `Ctrl`+`Z` / `Ctrl`+`Y` | Undo / redo |
 
 In the preview, with **Edit preview** on:
@@ -175,7 +188,7 @@ the document. Three consequences, most important first:
    HTML written in the Markdown is kept word for word, shown as a distinct block
    that is not editable in the preview (edit it in the source pane).
 
-That last point is not an empty promise: `test/roundtrip.mjs` checks 33
+That last point is not an empty promise: `test/roundtrip.mjs` checks 62
 constructs, verifying both that the rendering is identical after a round trip
 and that the source stops changing on the next pass.
 
@@ -200,6 +213,9 @@ angle-bracket / reference-style links, images, escapes, raw HTML.
 Extended syntax: tables with alignment, fenced code blocks with language tags,
 footnotes, heading IDs, definition lists, strikethrough, task lists, emoji
 shortcodes, highlight, subscript, superscript, and automatic URL linking.
+
+Maths is **not** part of the Markdown Guide and so counts in neither figure; it
+has its own section above and its own round-trip cases.
 
 **Heading anchors are generated automatically**, the way GitHub, GitLab, Pandoc
 and the static site generators do it: a table of contents written as
@@ -230,11 +246,37 @@ regenerating the source from the document model:
 
 ---
 
+## Maths
+
+TeX between `$…$` renders inline, between `$$…$$` as a display block, through
+KaTeX. In the rendered editor a formula is an atom: click it to edit its source,
+empty the box to delete it. Nothing is ever guessed back from rendered maths —
+the TeX is carried on the node, so the round trip is exact.
+
+`$` detection is conservative on purpose, because documents are full of dollars
+that are not formulas. `It costs $5 and $10`, `$PATH`, and `awk '$1 == $2'` all
+stay as text; `$E = mc^2$` does not. Those cases are in the round-trip suite.
+
+**The cost is the honest catch.** KaTeX adds 625 kB to the file, measured: 265 kB
+of code and 360 kB of stylesheet and base64 fonts. The fonts are inlined because `font-src data:`
+refuses a downloaded one, and without them formulas fall back to a system serif
+whose metrics KaTeX's layout does not expect — visibly broken, not merely
+plainer. It roughly doubles what the browser transfers.
+
+If you never write maths, it is removable, though not with one line: the two
+`katex` imports, `renderMath` / `mathHtml` / `mathPlugin`, the `math_inline` and
+`math_block` schema nodes with their parser and serialiser rules — all marked
+"maths" in `src/markdown.js` — plus the `katexCss()` call in `build.mjs`. The
+same commit without any of it builds to 1.05 MB.
+
+---
+
 ## Known limitations
 
 - **Remote images do not display.** `![](https://…)` is blocked by `img-src`.
   This is deliberate: allowing remote images would reopen an egress channel to a
-  third party. `data:` images work.
+  third party. Paste or drop a local file instead — it is embedded as a `data:`
+  URI, which displays and travels with the document.
 - **Direct file writing needs a secure context** — see the section above.
 - **No automatic offline mode** (no service worker). The downloadable standalone
   file plays that role, in a more verifiable way.
@@ -267,9 +309,9 @@ if any of those break.
 ```bash
 npm run dev &
 npm install --no-save puppeteer
-node test/browser.mjs      # 77 end-to-end tests
-node test/roundtrip.mjs    # 33 Markdown constructs, round-tripped
-node test/buttons.mjs      # 41 controls, one assertion each
+node test/browser.mjs      # 82 end-to-end tests
+node test/roundtrip.mjs    # 62 Markdown constructs, round-tripped
+node test/buttons.mjs      # 54 controls and behaviours, one assertion each
 node test/syntax.mjs       # 62 Markdown Guide constructs, render + round trip
 ```
 
@@ -315,6 +357,30 @@ test/buttons.mjs    every control, one assertion each
 nginx/default.conf  security headers, GET/HEAD only
 Dockerfile          multi-stage build -> unprivileged nginx
 ```
+
+### Supply chain
+
+The bundled dependencies are now the largest attack surface: markdown-it,
+DOMPurify, ProseMirror, CodeMirror and KaTeX are compiled into the one file
+users run, and the release carries our own provenance attestation. A compromised
+upstream release would therefore ship signed by us. Three things push back:
+
+- **Actions pinned to commit SHAs**, not tags. A tag is mutable, and whoever
+  controls an action's repository could otherwise repoint `v5` at code that runs
+  with our `packages: write` token. The trailing comment records the version.
+- **`npm audit --audit-level=high` blocks the build.** Not a backlog item here:
+  a vulnerable dependency is shipped code.
+- **Dependabot**, weekly, grouped so a ProseMirror or CodeMirror upgrade is
+  reviewed as one diff rather than fifteen — those packages have to move
+  together or the bundle ends up with duplicated modules.
+
+### Which build am I running?
+
+The **?** dialog states the version and the commit. There is deliberately no
+build timestamp anywhere: two builds of the same commit must produce identical
+bytes, or the digest published with a release could not be reproduced by anyone.
+A build made from an edited working tree is labelled `-dirty`, since it matches
+no published digest.
 
 `src/markdown.js` is the sensitive one: as the single source of both parsing and
 serialisation, it is what guarantees that what is displayed and what is edited

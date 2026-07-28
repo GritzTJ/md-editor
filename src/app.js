@@ -31,6 +31,12 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
+  search,
+  searchKeymap,
+  openSearchPanel,
+  highlightSelectionMatches,
+} from "@codemirror/search";
+import {
   syntaxHighlighting,
   HighlightStyle,
   indentOnInput,
@@ -42,6 +48,11 @@ import { tags as t } from "@lezer/highlight";
 import { renderMarkdown } from "./markdown.js";
 import { createRichEditor } from "./rich.js";
 
+// Substituted at build time by esbuild's `define`; see build.mjs. Deliberately
+// no build date: two builds of the same commit have to produce the same bytes,
+// otherwise the digest published with a release cannot be reproduced.
+const BUILD = { version: __BUILD_VERSION__, commit: __BUILD_COMMIT__ };
+
 /* ===========================================================================
  * Local preferences
  *
@@ -52,6 +63,7 @@ import { createRichEditor } from "./rich.js";
 const KEY = {
   theme: "mdedit.theme",
   editing: "mdedit.editing",
+  outline: "mdedit.outline",
   split: "mdedit.split",
   autosave: "mdedit.autosave",
   draft: "mdedit.draft",
@@ -112,6 +124,44 @@ const cmTheme = EditorView.theme({
   ".cm-activeLineGutter": { backgroundColor: "var(--bg-inset)", color: "var(--fg)" },
   ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--bg-inset) 45%, transparent)" },
   ".cm-scroller": { overflow: "auto" },
+
+  // Search panel. CodeMirror ships its own light and dark palettes; neither
+  // follows this application's theme, so every surface is restated here.
+  ".cm-panels": {
+    backgroundColor: "var(--bg-alt)",
+    color: "var(--fg)",
+    fontFamily: "var(--font-ui)",
+  },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-panel.cm-search": { padding: "6px 8px" },
+  ".cm-panel.cm-search label": { fontSize: "11px", color: "var(--fg-muted)" },
+  ".cm-textfield": {
+    backgroundColor: "var(--bg)",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: "4px",
+    padding: "3px 6px",
+  },
+  ".cm-button": {
+    backgroundColor: "var(--bg)",
+    backgroundImage: "none",
+    color: "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: "4px",
+    padding: "3px 8px",
+  },
+  ".cm-button:hover": { backgroundColor: "var(--bg-inset)" },
+  ".cm-panel.cm-search [name=close]": {
+    color: "var(--fg-muted)",
+    fontSize: "18px",
+    padding: "0 6px",
+    cursor: "pointer",
+  },
+  ".cm-searchMatch": { backgroundColor: "color-mix(in srgb, var(--accent) 25%, transparent)" },
+  ".cm-searchMatch.cm-searchMatch-selected": {
+    backgroundColor: "color-mix(in srgb, var(--accent) 55%, transparent)",
+  },
+  ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--accent) 18%, transparent)" },
 });
 
 /* ===========================================================================
@@ -124,6 +174,7 @@ const state = {
   savedText: "", // reference content for the "modified" indicator
   autosave: store.get(KEY.autosave) === "1",
   editing: store.get(KEY.editing) === "1", // editing the rendered document
+  outline: store.get(KEY.outline) === "1",
 };
 
 const SAMPLE = `# Local Markdown editor
@@ -183,6 +234,13 @@ const btnSave = button("Save", "Save (Ctrl+S)", doSave);
 const btnSaveAs = button("Save as", "Save under a different name (Ctrl+Shift+S)", doSaveAs);
 const btnNew = button("New", "Empty the editor", doNew);
 
+// Disabled rather than hidden while the rendered document is being edited: the
+// source pane is off screen then, and a Find button that silently searches an
+// invisible surface is worse than one that plainly says it does not apply.
+const btnFind = button("Find", "Find and replace in the source (Ctrl+F)", doFind);
+
+const btnOutline = button("Outline", "Show the document outline", toggleOutline);
+
 // There is no layout control any more. Source and live preview are always side
 // by side; the only other state is editing the rendered document, and that
 // takes the full width. One button, two states, no way for a layout choice and
@@ -209,7 +267,7 @@ btnClearDraft.classList.add("hidden");
 const toolbar = el("header", { class: "tb" },
   btnOpen, btnSave, btnSaveAs,
   el("div", { class: "tb-sep" }),
-  btnNew,
+  btnNew, btnFind, btnOutline,
   el("div", { class: "tb-sep" }),
   btnEdit,
   el("div", { class: "tb-sep" }),
@@ -277,8 +335,11 @@ const ribbon = el("div", { class: "rb", role: "toolbar", "aria-label": "Formatti
   rbButton("hr", "Divider", "Horizontal rule", () => rich.commands.horizontalRule()),
   el("div", { class: "tb-sep" }),
   rbButton("link", "Link", "Insert a link (Ctrl+K)", () => rich.commands.link()),
-  rbButton("image", "Image", "Insert an image", () => rich.commands.image()),
+  rbButton("image", "Image", "Insert an image by URL — or paste / drop a file to embed it", () => rich.commands.image()),
   rbButton("table", "Table", "Insert a table", () => rich.commands.table()),
+  el("div", { class: "tb-sep" }),
+  rbButton("math", "Math", "Insert an inline formula (TeX)", () => rich.commands.math()),
+  rbButton("mathBlock", "Math block", "Insert a display formula (TeX)", () => rich.commands.mathBlock()),
 );
 
 // Table operations only appear when the cursor is inside a table, to avoid a
@@ -302,6 +363,21 @@ const previewHost = el("section", { class: "pane pane-preview" }, preview, richH
 const divider = el("div", { class: "divider", role: "separator", "aria-orientation": "vertical" });
 const panes = el("main", { class: "panes" }, editorHost, divider, previewHost);
 
+// --- outline ----------------------------------------------------------------
+//
+// Built from the rendered surface currently on screen -- the live preview, or
+// the rendered editor when that is the one showing -- rather than from the
+// source text. Both are produced by the same engine, so the headings are the
+// same; reading the DOM means the entries scroll to a real element instead of
+// guessing at a position in the text.
+
+const outlineList = el("nav", { class: "outline-list", "aria-label": "Document outline" });
+const outline = el("aside", { class: "outline hidden" },
+  el("div", { class: "outline-head", text: "Outline" }),
+  outlineList);
+
+const workspace = el("div", { class: "workspace" }, outline, panes);
+
 // --- status bar -------------------------------------------------------------
 
 const sbName = el("b", { text: state.fileName });
@@ -314,7 +390,7 @@ const statusbar = el("footer", { class: "sb" },
   el("span", { class: "sb-spacer" }),
   sbMsg, sbCounts);
 
-app.append(toolbar, ribbon, panes, statusbar, fileInput);
+app.append(toolbar, ribbon, workspace, statusbar, fileInput);
 
 /* ===========================================================================
  * Source pane (CodeMirror)
@@ -336,11 +412,39 @@ const view = new EditorView({
       rectangularSelection(),
       crosshairCursor(),
       highlightActiveLine(),
+      highlightSelectionMatches(),
       syntaxHighlighting(mdHighlight, { fallback: true }),
       markdown({ base: markdownLanguage, codeLanguages: [] }),
       EditorView.lineWrapping,
       cmTheme,
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      // Search runs entirely on the in-memory document: it is a string scan,
+      // not a service call, and adds no way out of the tab.
+      search({ top: true }),
+      // Before defaultKeymap so Ctrl+F reaches the panel rather than the
+      // browser's own find bar, which cannot see unrendered lines.
+      keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+      // An image dropped or pasted here is encoded into the document; see
+      // "Embedding images". Anything that is not an image file falls through to
+      // CodeMirror's own handling.
+      EditorView.domEventHandlers({
+        paste(event, cmView) {
+          const files = imageFilesFrom(event.clipboardData);
+          if (!files.length) return false;
+          event.preventDefault();
+          const { from, to } = cmView.state.selection.main;
+          insertImagesAsMarkdown(files, from, to);
+          return true;
+        },
+        drop(event, cmView) {
+          const files = imageFilesFrom(event.dataTransfer);
+          if (!files.length) return false;
+          event.preventDefault();
+          const at = cmView.posAtCoords({ x: event.clientX, y: event.clientY })
+            ?? cmView.state.selection.main.from;
+          insertImagesAsMarkdown(files, at, at);
+          return true;
+        },
+      }),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) onSourceChanged();
       }),
@@ -366,6 +470,12 @@ function initialDoc() {
   return SAMPLE;
 }
 
+/** Open the find/replace panel over the source pane. */
+function doFind() {
+  if (state.editing) return;
+  openSearchPanel(view);
+}
+
 /* ===========================================================================
  * Preview pane (ProseMirror)
  * ======================================================================== */
@@ -374,6 +484,7 @@ const rich = createRichEditor({
   parent: richHost,
   onChange: onRichChanged,
   onState: updateRibbon,
+  embedImage,
 });
 
 /* ===========================================================================
@@ -430,6 +541,7 @@ function pullFromRich() {
 
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: markdown } });
   updateStatus();
+  refreshOutline();
   if (state.autosave) persistDraft(markdown);
 }
 
@@ -451,6 +563,57 @@ function scheduleRender() {
 function render() {
   if (state.editing) return; // the read-only pane is hidden
   preview.innerHTML = renderMarkdown(text());
+  refreshOutline();
+}
+
+/* --- outline ---------------------------------------------------------- */
+
+/** Whichever rendered surface is on screen. */
+function activeSurface() {
+  return state.editing ? richHost : preview;
+}
+
+/**
+ * Rebuild the outline from the headings on screen.
+ *
+ * Cheap enough to redo wholesale: a document with a hundred headings produces a
+ * hundred buttons, which costs less than working out what changed.
+ */
+function refreshOutline() {
+  if (!state.outline) return;
+
+  outlineList.textContent = "";
+  const headings = activeSurface().querySelectorAll("h1, h2, h3, h4, h5, h6");
+
+  if (!headings.length) {
+    outlineList.append(el("p", { class: "outline-empty", text: "No headings yet." }));
+    return;
+  }
+
+  for (const heading of headings) {
+    const label = heading.textContent.trim() || "(untitled)";
+    // The element is captured rather than its anchor: an id can be duplicated
+    // or absent, the node cannot, and this keeps the outline working on the
+    // rendered editor exactly as on the preview.
+    const entry = button(label, label, () => {
+      heading.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, `outline-item outline-l${heading.tagName[1]}`);
+    outlineList.append(entry);
+  }
+}
+
+function toggleOutline() {
+  setOutline(!state.outline);
+}
+
+function setOutline(on) {
+  state.outline = on;
+  store.set(KEY.outline, on ? "1" : "0");
+  outline.classList.toggle("hidden", !on);
+  btnOutline.setAttribute("aria-pressed", String(on));
+  btnOutline.title = on ? "Hide the document outline" : "Show the document outline";
+  refreshOutline();
+  view.requestMeasure();
 }
 
 function updateStatus() {
@@ -532,10 +695,12 @@ function setEditing(on) {
     ? "Return to the source and live preview"
     : "Write directly in the rendered document";
   btnEdit.setAttribute("aria-pressed", String(on));
+  btnFind.disabled = on;
 
   if (on) {
     pushToRich();
     updateRibbon();
+    refreshOutline(); // the outline now reads the rendered editor, not the preview
     rich.focus();
   } else {
     render();
@@ -861,6 +1026,89 @@ function refreshDraftUi() {
 }
 
 /* ===========================================================================
+ * Embedding images
+ *
+ * A pasted or dropped image is encoded into the document as a `data:` URI
+ * rather than linked. The security policy is one reason -- `img-src data:
+ * blob:` refuses every remote source -- but not the main one: a link to a local
+ * path breaks the moment the document moves, and tells whoever receives it what
+ * sits next to it on disk. Encoding the bytes makes the document
+ * self-contained, which is the same property the application itself has.
+ *
+ * The cost is paid in the source text: base64 inflates by a third, and all of
+ * it lands in the Markdown the user has to read. Hence the two thresholds.
+ * ======================================================================== */
+
+const IMAGE_WARN_BYTES = 512 * 1024;
+const IMAGE_CONFIRM_BYTES = 2 * 1024 * 1024;
+
+function fmtBytes(n) {
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " kB";
+}
+
+/** Image files carried by a paste or a drop, in the order given. */
+function imageFilesFrom(transfer) {
+  if (!transfer) return [];
+  return Array.from(transfer.files || []).filter((f) => f.type.startsWith("image/"));
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error("unreadable image"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Read an image file into a `data:` URI, warning about the weight it adds.
+ * Returns null when the user declines or the read fails.
+ */
+async function embedImage(file) {
+  const encoded = Math.ceil(file.size / 3) * 4;
+
+  if (file.size > IMAGE_CONFIRM_BYTES) {
+    const ok = window.confirm(
+      `${file.name || "This image"} is ${fmtBytes(file.size)}, and embedding it adds ` +
+      `about ${fmtBytes(encoded)} of text to the document.\n\nInsert it anyway?`);
+    if (!ok) return null;
+  }
+
+  try {
+    const src = await readAsDataUrl(file);
+    flash(file.size > IMAGE_WARN_BYTES
+      ? `Image embedded: ${fmtBytes(encoded)} added to the document`
+      : "Image embedded in the document",
+      file.size > IMAGE_WARN_BYTES ? "dirty" : "ok");
+    // The extension is noise in alternative text, and an approximate alt beats
+    // an empty one.
+    return { src, alt: (file.name || "image").replace(/\.[^.]+$/, "") };
+  } catch (err) {
+    flash("Could not read the image: " + err.message, "dirty");
+    return null;
+  }
+}
+
+/** Write the images into the source pane, replacing the range given. */
+async function insertImagesAsMarkdown(files, from, to) {
+  const parts = [];
+  for (const file of files) {
+    const image = await embedImage(file);
+    if (image) parts.push(`![${image.alt}](${image.src})`);
+  }
+  if (!parts.length) return;
+
+  const insert = parts.join("\n\n");
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+/* ===========================================================================
  * About dialog
  * ======================================================================== */
 
@@ -899,6 +1147,16 @@ function showAbout() {
       <li>compare its SHA-256 digest with the one published for that version.</li>
     </ul>
 
+    <h3>This build</h3>
+    <p>Version <b>${escapeHtml(BUILD.version)}</b>, commit
+    <code>${escapeHtml(BUILD.commit)}</code> &mdash; which is what the last
+    bullet above means by <em>that version</em>. The release of the same name
+    publishes the digest of the file, and rebuilding this commit reproduces it
+    byte for byte: no build date is baked in, so the source is the only
+    input.${BUILD.commit.endsWith("-dirty")
+      ? " <b>This one was built from an edited working tree</b>, so it matches no published digest."
+      : ""}</p>
+
     <h3>The two editing modes</h3>
     <p><b>Edit preview</b> replaces the split view with the rendered document
     alone, directly editable, with a formatting ribbon. The source text is then
@@ -918,9 +1176,21 @@ function showAbout() {
     <code>localStorage</code> &mdash; handy on a personal machine, best avoided
     on a shared one.</p>
 
+    <h3>Images and maths</h3>
+    <p>Paste or drop an image file and it is <b>encoded into the document</b> as
+    a <code>data:</code> URI &mdash; the only kind the policy displays, and the
+    only kind that still works once the file is moved elsewhere. Large images
+    are worth thinking twice about: base64 adds a third to their weight, in the
+    middle of your source text.</p>
+    <p>Maths is written as TeX between <code>$</code>&hellip;<code>$</code> or
+    <code>$$</code>&hellip;<code>$$</code> and rendered by KaTeX, fonts included
+    in this page. Prices and shell variables are left alone. In the rendered
+    editor, click a formula to edit it.</p>
+
     <h3>Shortcuts</h3>
     <ul>
       <li><code>Ctrl</code>+<code>O</code> open &mdash; <code>Ctrl</code>+<code>S</code> save &mdash; <code>Ctrl</code>+<code>Shift</code>+<code>S</code> save as</li>
+      <li><code>Ctrl</code>+<code>F</code> find and replace in the source</li>
       <li>In the preview: <code>Ctrl</code>+<code>B</code> bold, <code>Ctrl</code>+<code>I</code> italic, <code>Ctrl</code>+<code>K</code> link, <code>Tab</code> next cell</li>
     </ul>
   `;
@@ -975,6 +1245,7 @@ const savedSplit = store.get(KEY.split);
 if (savedSplit) panes.style.setProperty("--split", savedSplit);
 
 refreshDraftUi();
+setOutline(state.outline);
 updateStatus();
 render();
 

@@ -1,0 +1,40 @@
+# -----------------------------------------------------------------------------
+# The bundled dependencies are the project's largest attack surface: markdown-it,
+# DOMPurify, ProseMirror and CodeMirror are compiled into the single file the
+# user runs, and the release carries our own provenance attestation. A
+# compromised or vulnerable upstream release therefore ships signed by us.
+#
+# Hence weekly checks, and grouped pull requests so an upgrade is reviewed as
+# one diff rather than fifteen.
+# -----------------------------------------------------------------------------
+
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # These move together and are only meaningful together: a ProseMirror or
+      # CodeMirror package upgraded alone against its siblings is the usual way
+      # to get a duplicated module at runtime.
+      prosemirror:
+        patterns: ["prosemirror-*"]
+      codemirror:
+        patterns: ["@codemirror/*", "@lezer/*"]
+      markdown-it:
+        patterns: ["markdown-it", "markdown-it-*"]
+      rest:
+        patterns: ["*"]
+        exclude-patterns: ["prosemirror-*", "@codemirror/*", "@lezer/*", "markdown-it", "markdown-it-*"]
+
+  # Rewrites both the pinned SHA and the version comment in publish.yml.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

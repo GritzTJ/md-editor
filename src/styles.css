@@ -183,10 +183,18 @@ input:focus-visible {
 /* Source and live preview are always side by side. There is no layout choice:
    the only other state is editing the rendered document, which takes the full
    width and steps the source pane aside. */
+/* Outline beside the panes, both filling what the toolbars leave. */
+.workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .panes {
   display: grid;
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   grid-template-columns: var(--split, 1fr) 6px 1fr;
 }
@@ -646,10 +654,191 @@ li.ProseMirror-selectednode::after {
 /* Below this width the panes stack: the handle then acts on rows rather than
    columns. */
 @media (max-width: 720px) {
+  /* The outline would eat most of a narrow screen; it keeps a usable width
+     rather than stacking above the document, where it would push the editor
+     off screen. */
+  .outline { width: 150px; }
+
   .panes {
     grid-template-columns: 1fr;
     grid-template-rows: var(--split, 1fr) 6px 1fr;
   }
   .panes .divider { cursor: row-resize; }
   .panes.editing { grid-template-rows: 1fr; }
+}
+
+/* ------------------------------ maths ------------------------------ */
+
+/* KaTeX's own stylesheet is inlined ahead of this one at build time, fonts and
+   all; these rules only place the formulas in the document. */
+
+.md .math-block {
+  margin: 0 0 1em;
+  padding: 2px 0;
+  /* A formula wider than the pane scrolls in its own box rather than pushing a
+     horizontal scrollbar onto the whole document. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* KaTeX's display wrapper adds its own vertical margin; the box above already
+   supplies it, and both together leave a gap twice the size. */
+.md .math-block .katex-display { margin: 0; }
+
+.md .math-inline { display: inline-block; }
+
+.md .math-error {
+  color: var(--danger);
+  background: var(--code-bg);
+  padding: .1em .3em;
+  border-radius: 4px;
+}
+
+/* In the rendered editor a formula is an atom: clicking it opens its TeX. */
+.md-rich .math-inline,
+.md-rich .math-block { cursor: pointer; }
+
+.md-rich .math-inline.ProseMirror-selectednode,
+.md-rich .math-block.ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* ------------------------------ outline ------------------------------ */
+
+.outline {
+  flex: 0 0 auto;
+  width: 240px;
+  overflow: auto;
+  padding: 10px 0 14px;
+  background: var(--bg-alt);
+  border-right: 1px solid var(--border);
+}
+
+.outline-head {
+  padding: 0 12px 8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.outline-list { display: flex; flex-direction: column; }
+
+.outline-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  padding: 3px 12px;
+  cursor: pointer;
+  /* A long heading truncates rather than wrapping: the outline is for scanning,
+     and ragged multi-line entries destroy the sense of depth. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-item:hover { background: var(--bg-inset); }
+.outline-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.outline-l1 { font-weight: 600; }
+.outline-l2 { padding-left: 24px; }
+.outline-l3 { padding-left: 36px; }
+.outline-l4 { padding-left: 48px; }
+.outline-l5 { padding-left: 60px; }
+.outline-l6 { padding-left: 72px; }
+.outline-l4, .outline-l5, .outline-l6 { color: var(--fg-muted); }
+
+.outline-empty {
+  margin: 0;
+  padding: 2px 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* ------------------------------ printing ------------------------------
+   Ctrl+P prints the document, not the application. Toolbars, source pane and
+   splitter are interface; the rendered article is the only thing worth putting
+   on paper. Whichever rendered surface is on screen -- live preview or rendered
+   editor -- is the one that prints, since `.hidden` still applies to the other.
+
+   This is also the PDF export: "print to PDF" runs through the browser, so it
+   stays inside the tab and needs no converter, no upload and no dependency. */
+@media print {
+  /* Force the light palette whatever the screen theme. Browsers do not print
+     background colours by default, so a dark theme would otherwise come out as
+     light grey text on white paper. */
+  :root,
+  :root[data-theme="dark"],
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --bg-alt: #ffffff;
+    --bg-inset: #ffffff;
+    --fg: #000000;
+    --fg-muted: #444444;
+    --border: #999999;
+    --accent: #000000;
+    --code-bg: #f3f3f3;
+    --quote-bar: #999999;
+  }
+
+  @page { margin: 18mm 16mm; }
+
+  /* `.pane.pane-editor` rather than `.pane-editor`: the reset below sets
+     `display: block !important` on every `.pane`, and at equal specificity the
+     later rule wins -- the source pane would print. */
+  .tb, .rb, .sb, .divider, .pane.pane-editor, .sheet, .outline {
+    display: none !important;
+  }
+
+  /* Every scroll container has to give up its fixed height, or only the part
+     currently on screen reaches the page. */
+  html, body, #app, .workspace, .panes, .pane, .md {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .md {
+    padding: 0 !important;
+    font-size: 11pt;
+    max-width: none;
+  }
+
+  /* A heading stranded at the foot of a page, and a table or code block torn
+     across two, are what actually make a printout unreadable. The legacy
+     properties are there for Safari, which still ignores `break-*`. */
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+    break-after: avoid;
+    break-inside: avoid;
+    page-break-after: avoid;
+    page-break-inside: avoid;
+  }
+  .md pre, .md blockquote, .md table, .md img, .md .footnote-def, .md li {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* No horizontal scrollbar on paper: long lines have to wrap or they are cut
+     off at the margin. */
+  .md pre { white-space: pre-wrap; word-wrap: break-word; }
+
+  .md a { text-decoration: underline; }
+
+  /* A link is a dead end on paper unless its target is written out. External
+     ones only -- printing every in-document anchor would be noise. */
+  .md a[href^="http"]::after {
+    content: " <" attr(href) ">";
+    font-size: .85em;
+    font-weight: normal;
+    word-break: break-all;
+  }
 }

@@ -137,6 +137,29 @@ const sb = await page.$eval(".sb", (e) => e.textContent);
 ok("the status bar counts words", /\d+ words/.test(sb), sb.trim());
 ok("the modified indicator is on", /modified/.test(sb));
 
+// --- maths ---------------------------------------------------------------
+// KaTeX is the one dependency that would normally reach for a font over the
+// network, so it is checked here rather than only in the round-trip suite.
+await pasteSource("Inline $E = mc^2$ and:\n\n$$\n\\frac{a}{b}\n$$\n\nNot maths: $5 and $10.\n");
+
+ok("inline maths is rendered", (await page.$$("#preview .math-inline .katex")).length === 1);
+ok("display maths is rendered", (await page.$$("#preview .math-block .katex")).length === 1);
+ok("maths carries MathML for screen readers",
+  (await page.$$("#preview .katex-mathml annotation")).length === 2,
+  String((await page.$$("#preview .katex-mathml annotation")).length));
+ok("currency is not mistaken for maths",
+  (await page.$eval("#preview", (e) => e.textContent)).includes("$5 and $10"));
+
+// The fonts are inlined as data: URIs at build time; a single missed one would
+// show up as a font-src violation, and the formulas would fall back to a serif
+// whose metrics KaTeX does not expect.
+const fontsLoaded = await page.evaluate(async () => {
+  await document.fonts.ready;
+  return [...document.fonts].filter((f) => f.family.startsWith("KaTeX") && f.status === "loaded").length;
+});
+ok("KaTeX fonts load from the document itself", fontsLoaded > 0, String(fontsLoaded));
+ok("no CSP violation from rendering maths", csp.length === 0, csp.slice(0, 2).join(" | "));
+
 /* ========================= 3. sanitisation ========================= */
 console.log("\n--- HTML sanitisation ---");
 await page.evaluate(() => { window.__xss = 0; });

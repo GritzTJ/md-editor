@@ -23,6 +23,8 @@ import supPlugin from "markdown-it-sup";
 import deflistPlugin from "markdown-it-deflist";
 import footnotePlugin from "markdown-it-footnote";
 import { full as emojiPlugin } from "markdown-it-emoji";
+import katexPlugin from "@vscode/markdown-it-katex";
+import katex from "katex";
 import { Schema } from "prosemirror-model";
 import {
   schema as baseSchema,
@@ -194,6 +196,97 @@ function emojiAsTextPlugin(md) {
   });
 }
 
+/* --- maths ---------------------------------------------------------------
+ *
+ * KaTeX renders TeX to HTML and MathML in the tab, with its fonts embedded in
+ * the page as `data:` URIs -- no CDN, no request, nothing the CSP would have to
+ * make an exception for. That is the whole reason it is KaTeX and not MathJax:
+ * it is synchronous, self-contained, and needs no network to look right.
+ *
+ * The plugin's `$` detection is deliberately conservative, so ordinary prose
+ * keeps working: `$5 and $10`, `$PATH`, and `awk '$1 == $2'` are all left as
+ * text. Only something that looks like a formula is treated as one.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * TeX -> HTML.
+ *
+ * `throwOnError: false` makes KaTeX render a bad formula in red rather than
+ * abort: a typo mid-edit must not blank the whole preview.
+ *
+ * `trust: false` is the default, and is restated because it is load-bearing:
+ * it is what disables `\href`, `\url` and `\includegraphics`, the only KaTeX
+ * commands able to emit a URL. Sanitising the result as well is belt and
+ * braces, and cheap.
+ */
+function renderMath(tex, displayMode) {
+  try {
+    return katex.renderToString(tex, {
+      displayMode,
+      throwOnError: false,
+      trust: false,
+      strict: false,
+      output: "htmlAndMathml", // the MathML half is what a screen reader reads
+    });
+  } catch (err) {
+    const p = document.createElement("code");
+    p.className = "math-error";
+    p.textContent = `${displayMode ? "$$" : "$"}${tex}${displayMode ? "$$" : "$"}`;
+    p.title = "Maths error: " + err.message;
+    return p.outerHTML;
+  }
+}
+
+/**
+ * A rendered formula, wrapped so that the preview and the rich editor produce
+ * exactly the same element -- and so the TeX source travels on the node, which
+ * is what makes the round trip exact rather than a re-parse of rendered maths.
+ *
+ * `asBlock` is not the same question as `display`: `$$x$$` written in the
+ * middle of a paragraph is display maths in an inline position, and has to come
+ * out as a <span>. A <div> there would be hoisted out of the <p> by the HTML
+ * parser, tearing the paragraph in two.
+ */
+function mathHtml(tex, display, asBlock) {
+  const el = document.createElement(asBlock ? "div" : "span");
+  el.className = asBlock ? "math-block" : "math-inline";
+  el.setAttribute("data-tex", tex);
+  if (!asBlock) el.setAttribute("data-display", String(display));
+  el.innerHTML = renderMath(tex, display);
+  return el.outerHTML;
+}
+
+function mathPlugin(md) {
+  md.use(katexPlugin.default ?? katexPlugin);
+
+  /*
+   * `$$...$$` inside a paragraph is emitted by an inline rule, but the token it
+   * produces is *also* called `math_block` -- same name as the real block-level
+   * one. prosemirror-markdown keys its specs on the token type alone, so the
+   * two were indistinguishable: the inline occurrence was turned into a block
+   * node, which cannot live in a paragraph, and the entire paragraph was
+   * dropped on the first round trip.
+   *
+   * Renaming it here, before anything else reads the stream, is the same trick
+   * emojiAsTextPlugin uses, and keeps the distinction in one place.
+   */
+  md.core.ruler.push("math_inline_display", (state) => {
+    for (const token of state.tokens) {
+      if (token.type !== "inline" || !token.children) continue;
+      for (const child of token.children) {
+        if (child.type === "math_block") child.type = "math_inline_block";
+      }
+    }
+    return true;
+  });
+
+  // The plugin's own renderers are replaced so preview and editor share one
+  // markup, and so `data-tex` travels with the result.
+  md.renderer.rules.math_inline = (tokens, idx) => mathHtml(tokens[idx].content, false, false);
+  md.renderer.rules.math_inline_block = (tokens, idx) => mathHtml(tokens[idx].content, true, false);
+  md.renderer.rules.math_block = (tokens, idx) => mathHtml(tokens[idx].content.trim(), true, true);
+}
+
 // `html: true` preserves the original behaviour: raw HTML written in the
 // Markdown is interpreted, then sanitised by DOMPurify. Turning it off would
 // simplify life but break existing documents.
@@ -215,7 +308,10 @@ export const md = MarkdownIt("default", {
   .use(deflistPlugin)
   .use(footnotePlugin)
   .use(emojiPlugin)
-  .use(emojiAsTextPlugin);
+  .use(emojiAsTextPlugin)
+  // Last: the maths rules must see the text before the typographic ones would
+  // have rewritten anything inside a formula.
+  .use(mathPlugin);
 
 /* ===========================================================================
  * 2. HTML rendering for the read-only preview
@@ -259,9 +355,21 @@ DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
 const PURIFY_CONFIG = {
   // <style> would inject rules into the whole page, and a form gives the
   // illusion of a legitimate input: neither belongs in a document preview.
-  FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select"],
+  //
+  // `annotation-xml` is forbidden on purpose. It is the one MathML element that
+  // may contain arbitrary XHTML, and is the classic mutation-XSS vector; KaTeX
+  // never emits it.
+  FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "annotation-xml"],
   FORBID_ATTR: ["srcset", "ping", "formaction"],
   ALLOW_DATA_ATTR: true, // required by data-checked on task items
+
+  // KaTeX wraps its MathML as <semantics><mrow>…</mrow><annotation>TeX</annotation>.
+  // DOMPurify does not know those two, and stripping them left the raw TeX
+  // *string* behind as a bare text node inside <math> -- so a screen reader read
+  // the formula, then read its source aloud. Allowing the pair puts the
+  // annotation back where renderers know to ignore it.
+  ADD_TAGS: ["semantics", "annotation"],
+  ADD_ATTR: ["encoding"],
 };
 
 export function renderMarkdown(src) {
@@ -409,6 +517,52 @@ const footnoteDefinition = {
   }],
 };
 
+/* --- maths ----------------------------------------------------------------
+ * Atomic in both flavours: the TeX lives in an attribute, not as editable
+ * text, so the rendered formula can never fall out of step with its source.
+ * Editing one goes through the prompt in rich.js, the same route as a link.
+ * ---------------------------------------------------------------------- */
+
+function mathDOM(tex, display, asBlock) {
+  const el = document.createElement(asBlock ? "div" : "span");
+  el.className = asBlock ? "math-block" : "math-inline";
+  el.setAttribute("data-tex", tex);
+  if (!asBlock) el.setAttribute("data-display", String(display));
+  el.title = "Maths: click to edit";
+  el.innerHTML = DOMPurify.sanitize(renderMath(tex, display), PURIFY_CONFIG);
+  return el;
+}
+
+const mathInline = {
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  // `display` keeps `$$x$$` written inside a paragraph rendering as display
+  // maths, and serialising back the way it was written.
+  attrs: { tex: { default: "" }, display: { default: false } },
+  toDOM: (node) => mathDOM(node.attrs.tex, node.attrs.display, false),
+  parseDOM: [{
+    tag: "span.math-inline",
+    getAttrs: (dom) => ({
+      tex: dom.getAttribute("data-tex") || "",
+      display: dom.getAttribute("data-display") === "true",
+    }),
+  }],
+};
+
+const mathBlock = {
+  group: "block",
+  atom: true,
+  selectable: true,
+  attrs: { tex: { default: "" } },
+  toDOM: (node) => mathDOM(node.attrs.tex, true, true),
+  parseDOM: [{
+    tag: "div.math-block",
+    getAttrs: (dom) => ({ tex: dom.getAttribute("data-tex") || "" }),
+  }],
+};
+
 // Mark order decides nesting when marks overlap: the earliest in the schema is
 // the outermost. The base order puts `strong` before `link`, which turns
 // `[**bold** text](url)` into two separate links -- the bold part wrapping its
@@ -462,6 +616,8 @@ export const schema = new Schema({
     .addToEnd("definition_description", definitionDescription)
     .addToEnd("footnote_ref", footnoteRef)
     .addToEnd("footnote_definition", footnoteDefinition)
+    .addToEnd("math_inline", mathInline)
+    .addToEnd("math_block", mathBlock)
     .addToEnd("html_block", htmlBlock)
     .addToEnd("html_inline", htmlInline),
   marks,
@@ -557,6 +713,12 @@ export const parser = new MarkdownParser(schema, md, {
   footnote_anchor: { ignore: true, noCloseToken: true },
   footnote_ref: { node: "footnote_ref", getAttrs: (tok) => ({ label: tok.meta.label }) },
   footnote: { block: "footnote_definition", getAttrs: (tok) => ({ label: tok.meta.label }) },
+
+  // `math_inline_block` is `$$...$$` written inside a paragraph: display maths
+  // in an inline position, so an inline node carrying the display flag.
+  math_inline: { node: "math_inline", getAttrs: (tok) => ({ tex: tok.content, display: false }) },
+  math_inline_block: { node: "math_inline", getAttrs: (tok) => ({ tex: tok.content, display: true }) },
+  math_block: { node: "math_block", getAttrs: (tok) => ({ tex: tok.content.trim() }) },
 
   html_block: { node: "html_block", getAttrs: (tok) => ({ content: tok.content }) },
   html_inline: { node: "html_inline", getAttrs: (tok) => ({ content: tok.content }) },
@@ -713,6 +875,22 @@ export const serializer = new MarkdownSerializer(
     table_row: () => {},
     table_cell: () => {},
     table_header: () => {},
+
+    // `$` is not escaped on the way out: the TeX is written back exactly as it
+    // was typed, and a formula containing a bare `$` was never valid input in
+    // the first place.
+    math_inline(state, node) {
+      const fence = node.attrs.display ? "$$" : "$";
+      state.text(fence + node.attrs.tex + fence, false);
+    },
+
+    math_block(state, node) {
+      state.write("$$\n");
+      state.text(node.attrs.tex, false);
+      state.ensureNewLine();
+      state.write("$$");
+      state.closeBlock(node);
+    },
 
     html_block(state, node) {
       state.write(node.attrs.content.replace(/\n+$/, ""));

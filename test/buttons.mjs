@@ -157,6 +157,77 @@ ok("Clear draft", (await page.evaluate(() => localStorage.getItem("mdedit.draft"
 await page.click(".chk input");
 await wait(300);
 
+/* ========================= find and replace ========================= */
+console.log("\n--- find and replace ---");
+
+await setSource("alpha beta alpha gamma alpha\n");
+await click("Find");
+ok("Find opens the search panel", (await page.$(".cm-panel.cm-search")) !== null);
+
+await page.type(".cm-panel.cm-search .cm-textfield", "alpha");
+await wait(400);
+ok("Find highlights every match",
+  (await page.$$(".cm-searchMatch")).length >= 3,
+  String((await page.$$(".cm-searchMatch")).length));
+
+await page.type('.cm-panel.cm-search [name="replace"]', "delta");
+await click("replace all");
+const replaced = await src();
+ok("replace all", !replaced.includes("alpha") && (replaced.match(/delta/g) || []).length === 3,
+  JSON.stringify(replaced));
+
+await page.keyboard.press("Escape");
+await wait(300);
+ok("Escape closes the search panel", (await page.$(".cm-panel.cm-search")) === null);
+
+/* ========================= outline ========================= */
+console.log("\n--- outline ---");
+
+const outlineShown = () => page.$eval(".outline", (e) => getComputedStyle(e).display !== "none");
+
+await setSource("# One\n\ntext\n\n## Two\n\ntext\n\n### Three\n\ntext\n");
+await click("Outline");
+ok("Outline shows the panel", await outlineShown());
+
+const entries = await page.$$eval(".outline-item", (els) => els.map((e) => e.textContent));
+ok("Outline lists every heading", entries.join("|") === "One|Two|Three", JSON.stringify(entries));
+
+const levels = await page.$$eval(".outline-item", (els) =>
+  els.map((e) => e.className.match(/outline-l(\d)/)[1]).join(""));
+ok("Outline records the heading level", levels === "123", levels);
+
+// Follows whichever surface is on screen, so it has to survive the switch.
+await click("Edit preview");
+const richEntries = await page.$$eval(".outline-item", (els) => els.map((e) => e.textContent));
+ok("Outline follows the rendered editor", richEntries.join("|") === "One|Two|Three",
+  JSON.stringify(richEntries));
+await click("Back to split");
+
+await click("Outline");
+ok("Outline hides again", !(await outlineShown()));
+
+/* ========================= pasting an image ========================= */
+console.log("\n--- pasting an image ---");
+
+// A real paste cannot be driven from outside the page, so the event is built
+// with the same DataTransfer a browser would hand over.
+const pasteImage = (selector) => page.evaluate((sel, dataUrl) => {
+  const binary = atob(dataUrl.split(",")[1]);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const transfer = new DataTransfer();
+  transfer.items.add(new File([bytes], "pixel.png", { type: "image/png" }));
+  document.querySelector(sel).dispatchEvent(
+    new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+}, selector, DATA_IMAGE);
+
+await setSource("");
+await page.click(".cm-content");
+await pasteImage(".cm-content");
+await wait(700);
+ok("pasting an image into the source embeds it as a data: URI",
+  /!\[pixel\]\(data:image\/png;base64,/.test(await src()), JSON.stringify(await src()));
+
 /* ========================= formatting ribbon ========================= */
 console.log("\n--- formatting ribbon ---");
 
@@ -267,6 +338,32 @@ ok("a data: image really displays",
   (await page.$$eval("#rich img", (imgs) => imgs.filter((i) => i.complete && i.naturalWidth > 0).length)) === 1);
 ok("Image", (await splitAndRead()).includes("![alt text](data:image/png;base64,"),
   JSON.stringify((await src()).slice(0, 60)));
+
+// --- maths -------------------------------------------------------------
+// Both open a prompt for the TeX, the same route as a link URL.
+
+await editRendered("before");
+await page.click("#rich .ProseMirror");
+await page.keyboard.down("Control"); await page.keyboard.press("End"); await page.keyboard.up("Control");
+answers = ["E = mc^2"];
+await click("Math");
+const inlineMaths = await splitAndRead();
+ok("Math", /\$E = mc\^2\$/.test(inlineMaths), JSON.stringify(inlineMaths));
+
+await editRendered("before");
+await page.click("#rich .ProseMirror");
+await page.keyboard.down("Control"); await page.keyboard.press("End"); await page.keyboard.up("Control");
+answers = ["\\int_0^1 x\\,dx"];
+await click("Math block");
+const blockMaths = await splitAndRead();
+ok("Math block", /\$\$\n\\int_0\^1 x\\,dx\n\$\$/.test(blockMaths), JSON.stringify(blockMaths));
+
+// The formula has to render, not merely serialise.
+await editRendered("$E = mc^2$");
+ok("a formula renders in the rendered editor",
+  (await page.$$("#rich .katex")).length === 1,
+  String((await page.$$("#rich .katex")).length));
+await click("Back to split");
 
 /* ========================= table tools ========================= */
 console.log("\n--- table tools ---");

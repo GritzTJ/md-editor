@@ -96,6 +96,18 @@ const CASES = [
   ["autolinked URL", "See <https://example.com> now.\n"],
   ["highlight inside a list", "- some ==marked== text\n"],
   ["mixed extended", "# T {#top}\n\n==mark== H~2~O X^2^\n\nTerm\n: Def\n\nNote.[^n]\n\n[^n]: Here.\n"],
+
+  // Maths. The third case is the one that matters: `$$…$$` written inside a
+  // paragraph produces a token named `math_block` even though it is inline, and
+  // treating it as a block node destroyed the whole paragraph on the way back.
+  ["inline maths", "Mass-energy is $E = mc^2$ in the end.\n"],
+  ["display maths", "$$\n\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}\n$$\n"],
+  ["display maths inside a paragraph", "Before $$\\sum_{i=1}^{n} i$$ after.\n"],
+  ["maths with a matrix", "$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$\n"],
+  ["maths beside prose", "A fraction $\\frac{a}{b}$, a list:\n\n- $x^2$\n- $y_1$\n"],
+  // Currency and shell variables must survive untouched: they are the reason
+  // the `$` rules have to stay conservative.
+  ["dollars that are not maths", "It costs $5 and $10, and $PATH stays $PATH.\n"],
 ];
 
 /* --- Bundle the engine, run it in the browser ---------------------------- */

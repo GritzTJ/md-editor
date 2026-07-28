@@ -16,6 +16,7 @@
  * ------------------------------------------------------------------------- */
 
 import * as esbuild from "esbuild";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -25,6 +26,40 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(root, "dist");
 const serve = process.argv.includes("--serve");
+
+/* --- 0. Build identity ---------------------------------------------------
+ *
+ * Version and commit are baked into the page so a user can tell which release
+ * they are running and compare it with the published digest.
+ *
+ * Note what is *not* here: a build timestamp. Two builds of the same commit
+ * must produce the same bytes, or the digest published with a release proves
+ * nothing -- nobody could reproduce it. Identity therefore comes only from
+ * inputs that are themselves part of the source.
+ *
+ * `.git` is excluded from the Docker build context, so the image build passes
+ * the commit in through MD_EDITOR_COMMIT instead of reading it from git.
+ * ---------------------------------------------------------------------- */
+
+const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+
+function buildCommit() {
+  const fromEnv = (process.env.MD_EDITOR_COMMIT || "").trim();
+  if (fromEnv) return fromEnv.slice(0, 12);
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    const sha = git("rev-parse", "--short=12", "HEAD");
+    // A build made from an edited tree is not the commit it claims to be, and
+    // its digest will match nothing. Say so rather than let it pass as clean.
+    const dirty = git("status", "--porcelain") !== "";
+    return dirty ? `${sha}-dirty` : sha;
+  } catch {
+    return "unknown";
+  }
+}
+
+const version = pkg.version;
+const commit = buildCommit();
 
 /* --- 1. JavaScript bundle ------------------------------------------------ */
 
@@ -38,13 +73,69 @@ const bundle = await esbuild.build({
   legalComments: "eof", // dependency MIT licences stay in the file
   write: false,
   logLevel: "info",
+  define: {
+    __BUILD_VERSION__: JSON.stringify(version),
+    __BUILD_COMMIT__: JSON.stringify(commit),
+  },
+  // katex publishes a CommonJS build and an ES module build of the same code,
+  // and its `exports` map hands out whichever matches the caller: markdown.js
+  // imports it, @vscode/markdown-it-katex requires it, and esbuild bundled both
+  // files -- 260 kB of duplicate. The alias forces one resolution for everyone.
+  alias: {
+    katex: resolve(root, "node_modules/katex/dist/katex.mjs"),
+  },
 });
 
 // `</script` can only appear in valid JavaScript inside a string, a regular
 // expression or a comment, so escaping it never changes the semantics -- and it
 // stops the HTML parser from closing the tag in the middle of the bundle.
 const js = bundle.outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
-const css = await readFile(resolve(root, "src/styles.css"), "utf8");
+
+/* --- 1b. KaTeX stylesheet, fonts included --------------------------------
+ *
+ * KaTeX's stylesheet points at twenty font files. Left alone, every formula
+ * would trigger a request the CSP refuses outright (`font-src data:`), and the
+ * maths would fall back to a system serif whose metrics KaTeX's layout does not
+ * expect -- visibly wrong, not merely plainer.
+ *
+ * So the faces are read at build time and inlined as `data:` URIs. Only woff2
+ * is kept: the woff and truetype copies would add roughly 800 kB for browsers
+ * that have all supported woff2 since 2016.
+ * ---------------------------------------------------------------------- */
+
+async function katexCss() {
+  const dir = resolve(root, "node_modules/katex/dist");
+  const source = await readFile(resolve(dir, "katex.min.css"), "utf8");
+
+  const encoded = new Map();
+  for (const [, name] of source.matchAll(/url\(fonts\/([\w-]+)\.woff2\)/g)) {
+    if (encoded.has(name)) continue;
+    const bytes = await readFile(resolve(dir, "fonts", `${name}.woff2`));
+    encoded.set(name, bytes.toString("base64"));
+  }
+
+  // Each `src:` list collapses to its single woff2 entry, now a data: URI.
+  const out = source.replace(
+    /src:\s*url\(fonts\/([\w-]+)\.woff2\)\s*format\("woff2"\)[^;}]*/g,
+    (whole, name) => {
+      const data = encoded.get(name);
+      if (!data) throw new Error(`no woff2 read for ${name}`);
+      return `src:url(data:font/woff2;base64,${data}) format("woff2")`;
+    },
+  );
+
+  const left = out.match(/url\(fonts\//g);
+  if (left) throw new Error(`${left.length} KaTeX font reference(s) left unresolved`);
+
+  console.log(`  katex             ${encoded.size} fonts inlined`);
+  return out;
+}
+
+const css = `${await katexCss()}\n${await readFile(resolve(root, "src/styles.css"), "utf8")}`;
+
+// The stylesheet is inlined raw, so a literal `</style` anywhere in it would
+// close the tag early and spill CSS into the document.
+if (/<\/style/i.test(css)) throw new Error("the stylesheet contains a literal </style");
 
 /* --- 2. Content Security Policy ------------------------------------------ */
 
@@ -117,7 +208,8 @@ const fileHash = createHash("sha256").update(html, "utf8").digest("hex");
 await writeFile(resolve(dist, "index.html.sha256"), `${fileHash}  index.html\n`, "utf8");
 
 const kb = (n) => (n / 1024).toFixed(1) + " kB";
-console.log(`\n  dist/index.html   ${kb(Buffer.byteLength(html))}  (js ${kb(Buffer.byteLength(js))}, css ${kb(Buffer.byteLength(css))})`);
+console.log(`\n  build             ${version} (${commit})`);
+console.log(`  dist/index.html   ${kb(Buffer.byteLength(html))}  (js ${kb(Buffer.byteLength(js))}, css ${kb(Buffer.byteLength(css))})`);
 console.log(`  sha256            ${fileHash}`);
 console.log(`  script-src        'sha256-${scriptHash}'\n`);
 

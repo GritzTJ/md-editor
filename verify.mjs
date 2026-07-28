@@ -94,7 +94,15 @@ check("no external resource referenced in the document", externals.length === 0,
 // these APIs by name and must not trip the alarm. If one of these patterns ever
 // shows up, a dependency has changed behaviour and deserves a read.
 const netPatterns = [
-  ["fetch()", /\bfetch\s*\(/],
+  // `fetch` is the awkward one: KaTeX's TeX parser has a `fetch()` method that
+  // returns the next token, so the bundle is full of `r.fetch()` call sites and
+  // one `fetch(){...}` method definition, none of which touch the network. The
+  // pattern therefore wants a bare `fetch(` -- no `.` or identifier character
+  // before it, ruling out a method call -- that is also passed an argument,
+  // ruling out the definition. The qualified global forms are matched
+  // separately, since those do have a dot in front.
+  ["fetch()", /(?<![.\w$])fetch\s*\(\s*(?!\)\s*\{)/],
+  ["window.fetch()", /\b(?:window|globalThis|self)\s*\.\s*fetch\s*\(/],
   ["new XMLHttpRequest()", /new\s+XMLHttpRequest|XMLHttpRequest\s*\(/],
   ["new WebSocket()", /new\s+WebSocket\s*\(/],
   ["new EventSource()", /new\s+EventSource\s*\(/],

@@ -18,6 +18,12 @@ RUN npm ci --no-audit --no-fund
 COPY build.mjs verify.mjs ./
 COPY src ./src
 
+# `.git` is not in the build context, so the commit is passed in rather than
+# read. Declared here, after `npm ci`, so a new commit does not invalidate the
+# dependency layer.
+ARG COMMIT=unknown
+ENV MD_EDITOR_COMMIT=$COMMIT
+
 # Verification is part of the build: no image can be produced with a CSP digest
 # out of step, or with a network call introduced by a dependency.
 RUN npm run build && node verify.mjs
