@@ -17,8 +17,8 @@
     "@codemirror/view": "^6.43.7",
     "@lezer/highlight": "^1.2.1",
     "@vscode/markdown-it-katex": "^1.1.2",
-    "dompurify": "^3.4.12",
-    "katex": "^0.18.1",
+    "dompurify": "^3.4.13",
+    "katex": "^0.18.4",
     "markdown-it": "^14.3.0",
     "markdown-it-deflist": "^4.0.0",
     "markdown-it-emoji": "^3.1.0",
@@ -39,6 +39,6 @@
     "prosemirror-view": "^1.42.2"
   },
   "devDependencies": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.2"
   }
 }
